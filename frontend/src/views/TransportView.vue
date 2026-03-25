@@ -1,0 +1,324 @@
+<script setup>
+import { computed, onMounted, reactive, ref } from 'vue'
+import api from '../services/api'
+import { useHotelStore } from '../stores/hotel'
+
+const hotel = useHotelStore()
+
+const transportSearch = ref('')
+const transportResult = ref({ tone: '', text: '' })
+const editingTransportId = ref('')
+const showTransportModal = ref(false)
+const transportRates = ref([])
+const transportManifest = ref([])
+
+const transportForm = reactive({
+  driver: '',
+  pickupPriceValue: 250000,
+  dropOffPriceValue: 250000,
+  vehicle: '',
+  note: '',
+})
+
+const filteredTransportRates = computed(() => {
+  const query = transportSearch.value.trim().toLowerCase()
+
+  return transportRates.value.filter((item) => {
+    const haystack = [item.id, item.driver, item.vehicle, item.pickupPrice, item.dropOffPrice, item.note]
+      .join(' ')
+      .toLowerCase()
+
+    return !query || haystack.includes(query)
+  })
+})
+
+const transportSummary = computed(() => ({
+  drivers: transportRates.value.length,
+  avgPickup: transportRates.value.length
+    ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 })
+      .format(transportRates.value.reduce((total, item) => total + item.pickupPriceValue, 0) / transportRates.value.length)
+    : '-',
+  avgDropOff: transportRates.value.length
+    ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 })
+      .format(transportRates.value.reduce((total, item) => total + item.dropOffPriceValue, 0) / transportRates.value.length)
+    : '-',
+}))
+
+const resetTransportForm = (clearResult = true) => {
+  editingTransportId.value = ''
+  transportForm.driver = ''
+  transportForm.pickupPriceValue = 250000
+  transportForm.dropOffPriceValue = 250000
+  transportForm.vehicle = ''
+  transportForm.note = ''
+
+  if (clearResult) {
+    transportResult.value = { tone: '', text: '' }
+  }
+}
+
+const closeTransportModal = (clearResult = true) => {
+  showTransportModal.value = false
+  resetTransportForm(clearResult)
+}
+
+const openCreateTransportModal = () => {
+  resetTransportForm()
+  showTransportModal.value = true
+}
+
+const editTransport = (transport) => {
+  editingTransportId.value = String(transport.dbId)
+  transportForm.driver = transport.driver
+  transportForm.pickupPriceValue = transport.pickupPriceValue
+  transportForm.dropOffPriceValue = transport.dropOffPriceValue
+  transportForm.vehicle = transport.vehicle
+  transportForm.note = transport.note
+  transportResult.value = { tone: '', text: '' }
+  showTransportModal.value = true
+}
+
+const loadTransportRates = async () => {
+  try {
+    const [response, bookingResponse] = await Promise.all([
+      api.get('/transport-rates'),
+      api.get('/bookings', { params: { per_page: 500 } }),
+    ])
+    transportRates.value = Array.isArray(response.data?.data) ? response.data.data : []
+    hotel.setTransportRates(transportRates.value)
+    const bookingRows = Array.isArray(bookingResponse.data?.data) ? bookingResponse.data.data : []
+    transportManifest.value = bookingRows
+      .flatMap((booking) =>
+        (Array.isArray(booking.addons) ? booking.addons : [])
+          .filter((addon) => addon.addonType === 'transport')
+          .map((addon) => ({
+            ref: `${booking.code}-${addon.id}`,
+            schedule: addon.serviceDateLabel ?? addon.serviceDate ?? '',
+            service: addon.addonLabel,
+            pax: `Qty ${addon.quantity}`,
+            status: addon.status,
+          })),
+      )
+      .slice(0, 8)
+  } catch (error) {
+    transportResult.value = {
+      tone: 'error',
+      text: error?.response?.data?.message || error?.message || 'Gagal memuat data transport.',
+    }
+    transportRates.value = []
+    transportManifest.value = []
+    hotel.setTransportRates([])
+  }
+}
+
+const submitTransport = async () => {
+  transportResult.value = { tone: '', text: '' }
+
+  try {
+    const payload = {
+      driver: transportForm.driver,
+      pickupPriceValue: Number(transportForm.pickupPriceValue),
+      dropOffPriceValue: Number(transportForm.dropOffPriceValue),
+      vehicle: transportForm.vehicle,
+      note: transportForm.note,
+    }
+    const response = editingTransportId.value
+      ? await api.put(`/transport-rates/${editingTransportId.value}`, payload)
+      : await api.post('/transport-rates', payload)
+
+    transportResult.value = {
+      tone: 'success',
+      text: response.data?.message || 'Data transport berhasil disimpan.',
+    }
+
+    await loadTransportRates()
+    closeTransportModal(false)
+  } catch (error) {
+    transportResult.value = {
+      tone: 'error',
+      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Gagal menyimpan data transport.'),
+    }
+  }
+}
+
+onMounted(async () => {
+  await loadTransportRates()
+})
+</script>
+
+<template>
+  <section class="panel-card panel-dense">
+    <div class="panel-head panel-head-tight">
+      <div>
+        <p class="eyebrow-dark">Transport desk</p>
+        <h3>Driver pickup dan drop off</h3>
+      </div>
+      <div class="kpi-inline">
+        <span>{{ transportSummary.drivers }} driver</span>
+        <span>Avg pickup {{ transportSummary.avgPickup }}</span>
+        <span>Avg drop off {{ transportSummary.avgDropOff }}</span>
+      </div>
+    </div>
+
+    <div class="table-toolbar">
+      <input
+        v-model="transportSearch"
+        class="toolbar-search"
+        placeholder="Search driver / kendaraan / harga"
+      />
+      <button class="action-button primary" @click="openCreateTransportModal">
+        Tambah driver transport
+      </button>
+    </div>
+
+    <div v-if="transportResult.text" class="booking-feedback" :class="transportResult.tone">
+      {{ transportResult.text }}
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Driver</th>
+          <th>Vehicle</th>
+          <th>Pickup</th>
+          <th>Drop off</th>
+          <th>Catatan</th>
+          <th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="item in filteredTransportRates" :key="item.id">
+          <td><strong>{{ item.id }}</strong></td>
+          <td>{{ item.driver }}</td>
+          <td>{{ item.vehicle }}</td>
+          <td>{{ item.pickupPrice }}</td>
+          <td>{{ item.dropOffPrice }}</td>
+          <td>{{ item.note }}</td>
+          <td>
+            <button class="action-button" @click="editTransport(item)">Edit</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="page-grid two">
+    <article class="panel-card panel-dense">
+      <div class="panel-head panel-head-tight">
+        <div>
+          <p class="eyebrow-dark">Operational note</p>
+          <h3>Transport pricing rule</h3>
+        </div>
+        <span class="status-badge info">Front office</span>
+      </div>
+
+      <div class="compact-list">
+        <div class="list-row list-row-tight">
+          <strong>Pickup</strong>
+          <p class="subtle">Gunakan harga pickup untuk penjemputan tamu dari airport, harbour, atau meeting point menuju hotel.</p>
+        </div>
+        <div class="list-row list-row-tight">
+          <strong>Drop off</strong>
+          <p class="subtle">Gunakan harga drop off untuk pengantaran tamu dari hotel ke airport, harbour, atau titik keberangkatan lain.</p>
+        </div>
+        <div class="list-row list-row-tight">
+          <strong>Driver assignment</strong>
+          <p class="subtle">Daftar ini bisa dipakai front office saat memilih driver aktif untuk transfer tamu dan posting charge ke folio.</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="panel-card panel-dense">
+      <div class="panel-head panel-head-tight">
+        <div>
+          <p class="eyebrow-dark">Live manifest</p>
+          <h3>Transport related services</h3>
+        </div>
+        <span class="status-badge success">Live queue</span>
+      </div>
+
+      <div class="compact-list">
+        <div
+          v-for="item in transportManifest"
+          :key="item.ref"
+          class="list-row list-row-tight"
+        >
+          <div class="split-row">
+            <strong>{{ item.ref }}</strong>
+            <span>{{ item.schedule }}</span>
+          </div>
+          <p class="subtle">{{ item.service }} | {{ item.pax }} | {{ item.status }}</p>
+        </div>
+        <p v-if="!transportManifest.length" class="subtle booking-addon-empty">
+          Belum ada add-on transport aktif dari database.
+        </p>
+      </div>
+    </article>
+  </section>
+
+  <div v-if="showTransportModal" class="modal-backdrop" @click.self="closeTransportModal()">
+    <section class="modal-card">
+      <div class="panel-head panel-head-tight">
+        <div>
+          <p class="eyebrow-dark">Transport setup</p>
+          <h3>{{ editingTransportId ? `Edit driver ${editingTransportId}` : 'Tambah driver transport' }}</h3>
+        </div>
+        <button class="action-button" @click="closeTransportModal()">Close</button>
+      </div>
+
+      <div class="booking-form-grid">
+        <label class="field-stack">
+          <span>Driver</span>
+          <input v-model="transportForm.driver" class="form-control" placeholder="Contoh: Made Ariana" />
+        </label>
+
+        <label class="field-stack">
+          <span>Vehicle</span>
+          <input v-model="transportForm.vehicle" class="form-control" placeholder="Contoh: Toyota Avanza" />
+        </label>
+
+        <label class="field-stack">
+          <span>Harga pickup</span>
+          <input v-model="transportForm.pickupPriceValue" class="form-control" type="number" min="0" step="1000" />
+        </label>
+
+        <label class="field-stack">
+          <span>Harga drop off</span>
+          <input v-model="transportForm.dropOffPriceValue" class="form-control" type="number" min="0" step="1000" />
+        </label>
+
+        <label class="field-stack field-span-2">
+          <span>Catatan</span>
+          <textarea v-model="transportForm.note" class="form-control form-textarea" placeholder="Catatan driver, area layanan, atau jam operasional"></textarea>
+        </label>
+      </div>
+
+      <div class="booking-inline-summary">
+        <div class="note-cell">
+          <strong>Aturan input</strong>
+          <p class="subtle">Isi driver yang bertugas, lalu tentukan harga pickup dan drop off agar front office bisa posting biaya transport dengan cepat.</p>
+        </div>
+        <div class="note-cell">
+          <strong>Pricing check</strong>
+          <p class="subtle">
+            Pickup: {{ new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(transportForm.pickupPriceValue || 0)) }}
+            |
+            Drop off: {{ new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(transportForm.dropOffPriceValue || 0)) }}
+          </p>
+        </div>
+      </div>
+
+      <div v-if="transportResult.text" class="booking-feedback" :class="transportResult.tone">
+        {{ transportResult.text }}
+      </div>
+
+      <div class="modal-actions">
+        <button class="action-button" @click="closeTransportModal()">Cancel</button>
+        <button class="action-button primary" @click="submitTransport">
+          {{ editingTransportId ? 'Update driver' : 'Tambah driver' }}
+        </button>
+      </div>
+    </section>
+  </div>
+</template>
