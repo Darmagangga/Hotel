@@ -32,7 +32,7 @@ const loadServiceData = async () => {
       boatTickets: Array.isArray(catalog.boatTickets) ? catalog.boatTickets : [],
     }
   } catch (error) {
-    console.error('Gagal memuat service board:', error)
+    console.error('Failed to load service board:', error)
     bookingRows.value = []
     transportRates.value = []
     activityCatalog.value = { scooters: [], islandTours: [], boatTickets: [] }
@@ -61,25 +61,25 @@ const addonCatalogCards = computed(() => [
     name: 'Airport pickup / drop off',
     price: transportRates.value[0]?.pickupPrice ?? '-',
     schedule: `${transportRates.value.length} transport rate(s)`,
-    note: 'Harga diambil dari master transport aktif di database.',
+    note: 'Rate is pulled from the active transport master in the database.',
   },
   {
     name: 'Scooter rental',
     price: activityCatalog.value.scooters[0]?.price ?? '-',
     schedule: `${activityCatalog.value.scooters.length} scooter setup`,
-    note: 'Terhubung ke katalog scooter aktif di database.',
+    note: 'Linked to the active scooter catalog in the database.',
   },
   {
     name: 'Island tour',
     price: activityCatalog.value.islandTours[0]?.cost ?? '-',
     schedule: `${activityCatalog.value.islandTours.length} tour product`,
-    note: 'Terhubung ke katalog island tour aktif di database.',
+    note: 'Linked to the active island tour catalog in the database.',
   },
   {
     name: 'Boat ticket',
     price: activityCatalog.value.boatTickets[0]?.price ?? '-',
     schedule: `${activityCatalog.value.boatTickets.length} boat route`,
-    note: 'Terhubung ke katalog boat ticket aktif di database.',
+    note: 'Linked to the active boat ticket catalog in the database.',
   },
 ])
 
@@ -99,7 +99,7 @@ onMounted(async () => {
         <span class="status-badge success">High upsell potential</span>
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
             <th>Service</th>
@@ -118,7 +118,7 @@ onMounted(async () => {
             <td>{{ item.status }}</td>
           </tr>
           <tr v-if="!serviceManifest.length && !loading">
-            <td colspan="5" class="table-empty-cell">Belum ada add-on booking yang aktif di database.</td>
+            <td colspan="5" class="table-empty-cell">No active booking add-ons found in the database.</td>
           </tr>
         </tbody>
       </table>
@@ -144,3 +144,4 @@ onMounted(async () => {
     </article>
   </section>
 </template>
+

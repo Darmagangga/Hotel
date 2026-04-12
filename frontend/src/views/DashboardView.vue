@@ -13,6 +13,12 @@ const appliedRangeLabel = ref('')
 const appliedPeriodLabel = ref('Today')
 const generatedAt = ref('')
 const showAdvancedSections = false
+const periodOptions = [
+  { value: 'today', label: 'Today' },
+  { value: 'week', label: 'This week' },
+  { value: 'month', label: 'This month' },
+  { value: 'custom', label: 'Custom' },
+]
 
 const dashboard = ref({
   overview: [],
@@ -36,12 +42,40 @@ const hasDashboardData = computed(() => {
   ].some((collection) => Array.isArray(collection) && collection.length > 0)
 })
 
+const followUpCount = computed(() => dashboard.value.cashierQueue.length)
+const activeSnapshotLabel = computed(() => appliedRangeLabel.value || hotel.currentDateLabel)
+const dashboardHeadline = computed(() => {
+  if (activePeriod.value === 'custom') {
+    return 'Business summary for the selected date range'
+  }
+
+  return 'Monitor operations, revenue, and folios from one concise screen'
+})
+
+const summaryTone = (label, index) => {
+  const value = String(label ?? '').toLowerCase()
+
+  if (value.includes('outstanding')) {
+    return 'alert'
+  }
+
+  if (value.includes('occupancy') || value.includes('adr')) {
+    return 'calm'
+  }
+
+  if (value.includes('arrival')) {
+    return 'accent'
+  }
+
+  return index === 0 ? 'calm' : 'default'
+}
+
 const buildQueryParams = () => {
   const params = { period: activePeriod.value }
 
   if (activePeriod.value === 'custom') {
     if (!customStart.value || !customEnd.value) {
-      throw new Error('Pilih tanggal mulai dan akhir untuk custom range.')
+      throw new Error('Select a start date and end date for the custom range.')
     }
 
     params.start_date = customStart.value
@@ -76,13 +110,12 @@ const loadDashboardData = async () => {
     appliedRangeLabel.value = payload.rangeLabel ?? ''
     appliedPeriodLabel.value = payload.periodLabel ?? 'Today'
     generatedAt.value = payload.generatedAt ?? ''
-
     hotel.setOverview(dashboard.value.overview)
     hotel.setBusinessDate(payload.businessDate)
     hotel.setCurrentDateLabel(payload.currentDateLabel)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Gagal memuat dashboard owner.'
-    console.error('Gagal memuat dashboard owner:', error)
+    errorMessage.value = error instanceof Error ? error.message : 'Failed to load the owner dashboard.'
+    console.error('Failed to load owner dashboard:', error)
   } finally {
     loading.value = false
   }
@@ -111,74 +144,64 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="dashboard-owner-hero">
-    <div class="dashboard-owner-copy">
-      <p class="eyebrow-dark">Owner dashboard</p>
-      <h2>Business pulse that is ready for review</h2>
-      <p class="dashboard-owner-text">
-        Pantau occupancy, arrival pressure, outstanding folio, dan performa channel dari satu layar yang
-        terhubung langsung ke database.
-      </p>
-      <div class="dashboard-owner-meta">
-        <span class="dashboard-meta-pill">{{ appliedPeriodLabel }}</span>
-        <span class="dashboard-meta-pill">{{ appliedRangeLabel || hotel.currentDateLabel }}</span>
-        <span class="dashboard-meta-pill" v-if="generatedAt">Updated {{ generatedAt }}</span>
-      </div>
-    </div>
-
-    <div class="dashboard-owner-actions">
-      <div class="dashboard-period-switch">
-        <button
-          type="button"
-          class="switch-chip"
-          :class="{ active: activePeriod === 'today' }"
-          @click="applyPreset('today')"
-        >
-          Today
-        </button>
-        <button
-          type="button"
-          class="switch-chip"
-          :class="{ active: activePeriod === 'week' }"
-          @click="applyPreset('week')"
-        >
-          This Week
-        </button>
-        <button
-          type="button"
-          class="switch-chip"
-          :class="{ active: activePeriod === 'month' }"
-          @click="applyPreset('month')"
-        >
-          This Month
-        </button>
-        <button
-          type="button"
-          class="switch-chip"
-          :class="{ active: activePeriod === 'custom' }"
-          @click="applyPreset('custom')"
-        >
-          Custom
-        </button>
+  <section class="dashboard-command-deck">
+    <div class="dashboard-command-head">
+      <div class="dashboard-owner-copy">
+        <p class="eyebrow-dark">Dashboard owner</p>
+        <h2>{{ dashboardHeadline }}</h2>
+        <p class="dashboard-owner-text">
+          Focus on occupancy, arrivals, outstanding folios, and revenue mix without unnecessary visual distraction.
+        </p>
       </div>
 
-      <div class="dashboard-custom-range" v-if="activePeriod === 'custom'">
-        <label class="field-stack">
-          <span>Start</span>
-          <input v-model="customStart" type="date" class="form-control" />
-        </label>
-        <label class="field-stack">
-          <span>End</span>
-          <input v-model="customEnd" type="date" class="form-control" />
-        </label>
-        <button type="button" class="action-button primary" @click="applyCustomRange">Apply range</button>
-      </div>
-
-      <div class="dashboard-action-row">
-        <button type="button" class="utility-button" @click="loadDashboardData">Refresh</button>
+      <div class="dashboard-command-actions">
+        <button type="button" class="utility-button" @click="loadDashboardData">Refresh data</button>
         <button type="button" class="utility-button" @click="printDashboard">Print summary</button>
       </div>
     </div>
+
+    <div class="dashboard-command-toolbar">
+      <div class="dashboard-owner-meta">
+        <span class="dashboard-meta-pill">
+          <strong>Period</strong>
+          {{ appliedPeriodLabel }}
+        </span>
+        <span class="dashboard-meta-pill">
+          <strong>Snapshot</strong>
+          {{ activeSnapshotLabel }}
+        </span>
+        <span class="dashboard-meta-pill" v-if="generatedAt">
+          <strong>Updated</strong>
+          {{ generatedAt }}
+        </span>
+      </div>
+
+      <div class="dashboard-period-switch">
+        <button
+          v-for="option in periodOptions"
+          :key="option.value"
+          type="button"
+          class="switch-chip"
+          :class="{ active: activePeriod === option.value }"
+          @click="applyPreset(option.value)"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+    </div>
+
+    <div class="dashboard-custom-range" v-if="activePeriod === 'custom'">
+        <label class="field-stack">
+          <span>Start date</span>
+          <input v-model="customStart" type="date" class="form-control" />
+        </label>
+        <label class="field-stack">
+          <span>End date</span>
+          <input v-model="customEnd" type="date" class="form-control" />
+        </label>
+        <button type="button" class="action-button primary" @click="applyCustomRange">Apply</button>
+    </div>
+
   </section>
 
   <div v-if="errorMessage" class="booking-feedback error">
@@ -190,16 +213,16 @@ onMounted(async () => {
       <span class="loading-spinner"></span>
       <div>
         <strong>Refreshing owner dashboard</strong>
-        <p class="subtle">Menarik data terbaru dari database untuk periode yang dipilih.</p>
+        <p class="subtle">Fetching the latest data from the database for the selected period.</p>
       </div>
     </div>
   </section>
 
   <section v-else-if="!hasDashboardData" class="panel-card dashboard-empty-card">
-    <p class="eyebrow-dark">No dashboard data</p>
-    <h3>Belum ada aktivitas untuk periode ini</h3>
+    <p class="eyebrow-dark">Empty dashboard</p>
+    <h3>There is no activity for this period yet</h3>
     <p class="subtle">
-      Coba ganti periodenya atau mulai dari booking dan payment supaya owner dashboard menampilkan sinyal bisnis.
+      Try changing the period or start with bookings and payments so the dashboard can show business signals.
     </p>
   </section>
 
@@ -209,9 +232,14 @@ onMounted(async () => {
         v-for="(item, index) in dashboard.overview"
         :key="item.label"
         class="summary-box"
-        :class="{ accent: index === 2 }"
+        :class="`summary-box--${summaryTone(item.label, index)}`"
       >
-        <p class="summary-label">{{ item.label }}</p>
+        <div class="summary-box-head">
+          <p class="summary-label">{{ item.label }}</p>
+          <span class="summary-kicker">
+            {{ index === 0 ? 'Operasional' : index === 1 ? 'Front office' : index === 2 ? 'Perlu fokus' : 'Kinerja' }}
+          </span>
+        </div>
         <strong>{{ item.value }}</strong>
         <span>{{ item.note }}</span>
       </article>
@@ -221,11 +249,11 @@ onMounted(async () => {
       <article class="panel-card panel-dense">
         <div class="panel-head panel-head-tight">
           <div>
-            <p class="eyebrow-dark">Owner pulse</p>
-            <h3>Daily control board</h3>
-            <p class="panel-note">Snapshot untuk {{ appliedRangeLabel }}</p>
+            <p class="eyebrow-dark">Kontrol harian</p>
+            <h3>Operations panel</h3>
+            <p class="panel-note">Main snapshot for {{ activeSnapshotLabel }}</p>
           </div>
-          <span class="status-badge warning">{{ dashboard.cashierQueue.length }} need follow-up</span>
+          <span class="status-badge warning">{{ followUpCount }} folios need follow-up</span>
         </div>
 
         <div class="desk-alert-grid">
@@ -239,9 +267,9 @@ onMounted(async () => {
       <article class="panel-card panel-dense">
         <div class="panel-head panel-head-tight">
           <div>
-            <p class="eyebrow-dark">Revenue mix</p>
-            <h3>Money snapshot</h3>
-            <p class="panel-note">Komposisi pendapatan pada periode aktif</p>
+            <p class="eyebrow-dark">Komposisi pendapatan</p>
+            <h3>Revenue snapshot</h3>
+            <p class="panel-note">Monitor revenue contribution and the number of folios still open</p>
           </div>
         </div>
 
@@ -265,7 +293,7 @@ onMounted(async () => {
           <div>
             <p class="eyebrow-dark">Arrivals watch</p>
             <h3>Guests to prepare</h3>
-            <p class="panel-note">Kedatangan yang masuk dalam periode aktif</p>
+            <p class="panel-note">Arrivals included in the active period</p>
           </div>
           <span class="status-badge info">{{ dashboard.arrivalWatch.length }} visible</span>
         </div>
@@ -278,7 +306,7 @@ onMounted(async () => {
             </div>
             <p class="subtle">{{ item.room }} | {{ item.note }}</p>
           </div>
-          <p v-if="!dashboard.arrivalWatch.length" class="subtle booking-addon-empty">Tidak ada arrival pada periode ini.</p>
+          <p v-if="!dashboard.arrivalWatch.length" class="subtle booking-addon-empty">There are no arrivals in this period.</p>
         </div>
       </article>
 
@@ -287,7 +315,7 @@ onMounted(async () => {
           <div>
             <p class="eyebrow-dark">Cashier queue</p>
             <h3>Outstanding folios</h3>
-            <p class="panel-note">Settlement yang masih perlu di-follow-up</p>
+            <p class="panel-note">Settlements that still need follow-up</p>
           </div>
           <span class="status-badge warning">Need settlement</span>
         </div>
@@ -300,7 +328,7 @@ onMounted(async () => {
             </div>
             <p class="subtle">{{ item.item }} | Due {{ item.due }}</p>
           </div>
-          <p v-if="!dashboard.cashierQueue.length" class="subtle booking-addon-empty">Semua folio pada periode ini sudah settle.</p>
+          <p v-if="!dashboard.cashierQueue.length" class="subtle booking-addon-empty">All folios in this period are already settled.</p>
         </div>
       </article>
     </section>
@@ -311,32 +339,34 @@ onMounted(async () => {
           <div>
             <p class="eyebrow-dark">Channel mix</p>
             <h3>Top booking sources</h3>
-            <p class="panel-note">Sumber revenue teratas pada periode aktif</p>
+            <p class="panel-note">Top revenue sources in the active period</p>
           </div>
           <span class="status-badge info">{{ dashboard.channelPerformance.length }} source tracked</span>
         </div>
 
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Channel</th>
-              <th>Bookings</th>
-              <th>Revenue</th>
-              <th>Outstanding</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="!dashboard.channelPerformance.length">
-              <td colspan="4" class="table-empty-cell">Belum ada data channel pada periode ini.</td>
-            </tr>
-            <tr v-for="item in dashboard.channelPerformance" :key="item.channel">
-              <td><strong>{{ item.channel }}</strong></td>
-              <td>{{ item.bookings }}</td>
-              <td>{{ item.revenue }}</td>
-              <td>{{ item.outstanding }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-scroll">
+          <table v-smart-table class="data-table dashboard-table">
+            <thead>
+              <tr>
+                <th>Channel</th>
+                <th>Bookings</th>
+                <th>Revenue</th>
+                <th>Outstanding</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!dashboard.channelPerformance.length">
+                <td colspan="4" class="table-empty-cell">There is no channel data for this period yet.</td>
+              </tr>
+              <tr v-for="item in dashboard.channelPerformance" :key="item.channel">
+                <td><strong>{{ item.channel }}</strong></td>
+                <td>{{ item.bookings }}</td>
+                <td>{{ item.revenue }}</td>
+                <td>{{ item.outstanding }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </article>
 
       <article class="panel-card panel-dense">
@@ -344,34 +374,36 @@ onMounted(async () => {
           <div>
             <p class="eyebrow-dark">Room type mix</p>
             <h3>Product performance</h3>
-            <p class="panel-note">Kinerja produk kamar dan add-on</p>
+            <p class="panel-note">Room product and add-on performance</p>
           </div>
           <span class="status-badge success">{{ dashboard.roomTypePerformance.length }} type tracked</span>
         </div>
 
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Room type</th>
-              <th>Bookings</th>
-              <th>Room revenue</th>
-              <th>Add-on</th>
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="!dashboard.roomTypePerformance.length">
-              <td colspan="5" class="table-empty-cell">Belum ada data room type pada periode ini.</td>
-            </tr>
-            <tr v-for="item in dashboard.roomTypePerformance" :key="item.roomType">
-              <td><strong>{{ item.roomType }}</strong></td>
-              <td>{{ item.bookings }}</td>
-              <td>{{ item.roomRevenue }}</td>
-              <td>{{ item.addonRevenue }}</td>
-              <td>{{ item.totalRevenue }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-scroll">
+          <table v-smart-table class="data-table dashboard-table">
+            <thead>
+              <tr>
+                <th>Room type</th>
+                <th>Bookings</th>
+                <th>Room revenue</th>
+                <th>Add-on</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!dashboard.roomTypePerformance.length">
+                <td colspan="5" class="table-empty-cell">There is no room type data for this period yet.</td>
+              </tr>
+              <tr v-for="item in dashboard.roomTypePerformance" :key="item.roomType">
+                <td><strong>{{ item.roomType }}</strong></td>
+                <td>{{ item.bookings }}</td>
+                <td>{{ item.roomRevenue }}</td>
+                <td>{{ item.addonRevenue }}</td>
+                <td>{{ item.totalRevenue }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </article>
     </section>
 
@@ -381,34 +413,36 @@ onMounted(async () => {
           <div>
             <p class="eyebrow-dark">Live movement</p>
             <h3>Guest activity board</h3>
-            <p class="panel-note">Snapshot in-house berdasarkan business date aktif</p>
+            <p class="panel-note">In-house snapshot based on the active business date</p>
           </div>
           <span class="status-badge info">Database live</span>
         </div>
 
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Room</th>
-              <th>Guest</th>
-              <th>Stay</th>
-              <th>Status</th>
-              <th>Next action</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="!dashboard.liveMovement.length">
-              <td colspan="5" class="table-empty-cell">Belum ada tamu in-house yang aktif.</td>
-            </tr>
-            <tr v-for="item in dashboard.liveMovement" :key="`${item.room}-${item.guest}`">
-              <td><strong>{{ item.room }}</strong></td>
-              <td>{{ item.guest }}</td>
-              <td>{{ item.stay }}</td>
-              <td>{{ item.status }}</td>
-              <td class="subtle">{{ item.eta }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-scroll">
+          <table v-smart-table class="data-table dashboard-table">
+            <thead>
+              <tr>
+                <th>Room</th>
+                <th>Guest</th>
+                <th>Stay</th>
+                <th>Status</th>
+                <th>Next action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!dashboard.liveMovement.length">
+                <td colspan="5" class="table-empty-cell">There are no active in-house guests.</td>
+              </tr>
+              <tr v-for="item in dashboard.liveMovement" :key="`${item.room}-${item.guest}`">
+                <td><strong>{{ item.room }}</strong></td>
+                <td>{{ item.guest }}</td>
+                <td>{{ item.stay }}</td>
+                <td>{{ item.status }}</td>
+                <td class="subtle">{{ item.eta }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </article>
 
       <article class="panel-card panel-dense">
@@ -416,7 +450,7 @@ onMounted(async () => {
           <div>
             <p class="eyebrow-dark">Department board</p>
             <h3>Execution notes</h3>
-            <p class="panel-note">Catatan singkat untuk tindak lanjut tiap departemen</p>
+            <p class="panel-note">Short notes for follow-up by each department</p>
           </div>
           <span class="status-badge success">Operational pulse</span>
         </div>

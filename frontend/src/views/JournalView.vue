@@ -9,6 +9,7 @@ const hotel = useHotelStore()
 const loadingCoa = ref(false)
 const loadingJournals = ref(false)
 const savingJournal = ref(false)
+const showJournalForm = ref(false)
 const coaLoadResult = ref({ tone: '', text: '' })
 const journals = ref([])
 const editingJournalId = ref(null)
@@ -188,7 +189,7 @@ const loadCoaAccounts = async () => {
   } catch (error) {
     coaLoadResult.value = {
       tone: 'error',
-      text: 'Gagal mengambil daftar COA dari database. Menggunakan data lokal sementara.',
+      text: 'Failed to load the COA list from the database. Using temporary local data.',
     }
   } finally {
     loadingCoa.value = false
@@ -209,7 +210,7 @@ const loadJournals = async () => {
   } catch (error) {
     journalResult.value = {
       tone: 'error',
-      text: 'Gagal mengambil riwayat jurnal dari database.',
+      text: 'Failed to load journal history from the database.',
     }
   } finally {
     loadingJournals.value = false
@@ -222,6 +223,21 @@ const resetJournalForm = () => {
   journalForm.referenceNo = ''
   journalForm.description = ''
   journalForm.lines = [createJournalLine(), createJournalLine()]
+}
+
+const openCreateJournal = () => {
+  resetJournalForm()
+  journalResult.value = { tone: '', text: '' }
+  showJournalForm.value = true
+
+  if (typeof window !== 'undefined') {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+}
+
+const closeJournalForm = () => {
+  showJournalForm.value = false
+  resetJournalForm()
 }
 
 const addJournalLine = () => {
@@ -238,6 +254,7 @@ const removeJournalLine = (lineId) => {
 
 const editJournal = (journal) => {
   editingJournalId.value = journal.id
+  showJournalForm.value = true
   journalResult.value = { tone: '', text: '' }
   journalForm.journalDate = journal.journalDate
   journalForm.referenceNo = journal.referenceNo ?? ''
@@ -283,14 +300,15 @@ const submitJournal = async () => {
 
     journalResult.value = {
       tone: 'success',
-      text: response.data?.message ?? (editingJournalId.value ? 'Jurnal umum berhasil diperbarui.' : 'Jurnal umum berhasil diposting.'),
+      text: response.data?.message ?? (editingJournalId.value ? 'General journal updated successfully.' : 'General journal posted successfully.'),
     }
     await loadJournals()
     resetJournalForm()
+    showJournalForm.value = false
   } catch (error) {
     journalResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message ?? error?.response?.data?.errors?.lines?.[0] ?? (error instanceof Error ? error.message : 'Gagal memposting jurnal umum.'),
+      text: error?.response?.data?.message ?? error?.response?.data?.errors?.lines?.[0] ?? (error instanceof Error ? error.message : 'Failed to post the general journal.'),
     }
   } finally {
     savingJournal.value = false
@@ -304,15 +322,15 @@ onMounted(async () => {
 
 <template>
   <section class="page-grid">
-    <article class="panel-card panel-dense">
-      <LoadingState v-if="loadingCoa" label="Memuat daftar COA..." overlay />
-      <LoadingState v-if="savingJournal" label="Menyimpan jurnal ke database..." overlay />
+    <article v-if="showJournalForm" class="panel-card panel-dense">
+      <LoadingState v-if="loadingCoa" label="Loading COA list..." overlay />
+      <LoadingState v-if="savingJournal" label="Saving journal to the database..." overlay />
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Jurnal umum</p>
-          <h3>{{ editingJournalId ? `Edit jurnal #${editingJournalId}` : 'Input jurnal manual' }}</h3>
+          <p class="eyebrow-dark">General journal</p>
+          <h3>{{ editingJournalId ? `Edit journal #${editingJournalId}` : 'Manual journal entry' }}</h3>
         </div>
-        <span class="status-badge info">{{ hotel.coaList.length }} akun COA tersedia</span>
+        <span class="status-badge info">{{ hotel.coaList.length }} COA accounts available</span>
       </div>
 
       <div v-if="coaLoadResult.text" class="booking-feedback" :class="coaLoadResult.tone">
@@ -321,17 +339,17 @@ onMounted(async () => {
 
       <div class="booking-form-grid">
         <label class="field-stack">
-          <span>Tanggal jurnal</span>
+          <span>Journal date</span>
           <input v-model="journalForm.journalDate" class="form-control" type="date" />
         </label>
 
         <label class="field-stack">
-          <span>No referensi</span>
+          <span>Reference no.</span>
           <input v-model="journalForm.referenceNo" class="form-control" />
         </label>
 
         <label class="field-stack field-span-2">
-          <span>Deskripsi</span>
+          <span>Description</span>
           <textarea
             v-model="journalForm.description"
             class="form-control form-textarea"
@@ -350,24 +368,24 @@ onMounted(async () => {
               class="action-button room-select-remove"
               @click="removeJournalLine(line.id)"
             >
-              Hapus
+              Delete
             </button>
           </div>
 
           <div class="journal-line-grid">
             <label class="field-stack">
-              <span>Akun</span>
+              <span>Account</span>
               <Select2Field
                 v-model="line.account"
                 :options="coaOptions"
                 :multiple="false"
-                placeholder="Pilih akun COA"
+                placeholder="Select COA account"
               />
             </label>
 
             <label class="field-stack">
-              <span>Catatan</span>
-              <input v-model="line.memo" class="form-control" placeholder="Keterangan baris jurnal" />
+              <span>Notes</span>
+              <input v-model="line.memo" class="form-control" placeholder="Journal line note" />
             </label>
 
             <label class="field-stack">
@@ -384,7 +402,7 @@ onMounted(async () => {
             </label>
 
             <label class="field-stack">
-              <span>Kredit</span>
+              <span>Credit</span>
               <input
                 :value="displayJournalAmount(line, 'credit')"
                 class="form-control journal-amount-input"
@@ -398,7 +416,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <button type="button" class="action-button" @click="addJournalLine">Tambah baris jurnal</button>
+        <button type="button" class="action-button" @click="addJournalLine">Add journal line</button>
       </div>
 
       <div class="booking-inline-summary">
@@ -407,7 +425,7 @@ onMounted(async () => {
           <p class="subtle">{{ new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: Number.isInteger(journalDebitTotal) ? 0 : 2, maximumFractionDigits: 2 }).format(journalDebitTotal) }}</p>
         </div>
         <div class="note-cell">
-          <strong>Total kredit</strong>
+          <strong>Total credit</strong>
           <p class="subtle">{{ new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: Number.isInteger(journalCreditTotal) ? 0 : 2, maximumFractionDigits: 2 }).format(journalCreditTotal) }}</p>
         </div>
       </div>
@@ -417,38 +435,42 @@ onMounted(async () => {
       </div>
 
       <div class="modal-actions">
+        <button class="action-button" :disabled="savingJournal" @click="closeJournalForm()">Close</button>
         <button class="action-button" :disabled="savingJournal" @click="resetJournalForm()">Reset</button>
         <button class="action-button primary" :disabled="savingJournal" @click="submitJournal">
-          {{ savingJournal ? 'Menyimpan...' : (editingJournalId ? 'Update jurnal' : 'Posting jurnal') }}
+          {{ savingJournal ? 'Saving...' : (editingJournalId ? 'Update journal' : 'Post journal') }}
         </button>
       </div>
     </article>
 
-    <article class="panel-card panel-dense">
-      <LoadingState v-if="loadingJournals" label="Memuat riwayat jurnal..." overlay />
+    <article v-if="!showJournalForm" class="panel-card panel-dense">
+      <LoadingState v-if="loadingJournals" label="Loading journal history..." overlay />
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Riwayat jurnal</p>
-          <h3>Jurnal tersimpan di database</h3>
+          <p class="eyebrow-dark">Journal list</p>
+          <h3>Journals stored in the database</h3>
         </div>
-        <span class="status-badge success">{{ recentJournals.length }} jurnal</span>
+        <div class="modal-actions" style="margin-top: 0;">
+          <span class="status-badge success">{{ recentJournals.length }} journals</span>
+          <button class="action-button primary" @click="openCreateJournal">Create journal</button>
+        </div>
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
-            <th>Tanggal</th>
-            <th>No jurnal</th>
-            <th>Referensi</th>
-            <th>Keterangan</th>
+            <th>Date</th>
+            <th>Journal no.</th>
+            <th>Reference</th>
+            <th>Description</th>
             <th>Debit</th>
             <th>Kredit</th>
-            <th>Aksi</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="!loadingJournals && !recentJournals.length">
-            <td colspan="7" class="table-empty-cell">Belum ada jurnal di database.</td>
+            <td colspan="7" class="table-empty-cell">There are no journals in the database yet.</td>
           </tr>
           <tr v-for="item in recentJournals" :key="item.id">
             <td>{{ item.journalDate }}</td>

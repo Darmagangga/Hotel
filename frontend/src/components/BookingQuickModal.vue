@@ -8,9 +8,29 @@ const emit = defineEmits(['close', 'created'])
 
 const hotel = useHotelStore()
 const toDateKey = (value) => String(value ?? '').slice(0, 10)
-const firstDateKey = hotel.calendarDates[0].key
-const secondDateKey = hotel.calendarDates[1].key
-const lastDateKey = hotel.calendarDates[hotel.calendarDates.length - 1].key
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const toUtcDate = (value) => {
+  const [year, month, day] = String(value ?? '')
+    .slice(0, 10)
+    .split('-')
+    .map(Number)
+
+  return new Date(Date.UTC(year, (month || 1) - 1, day || 1))
+}
+const toIsoDate = (date) => {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+const addDateKeyDays = (value, days) => {
+  const date = toUtcDate(value)
+  date.setUTCDate(date.getUTCDate() + days)
+  return toIsoDate(date)
+}
+const diffDateKeys = (start, end) => Math.round((toUtcDate(end) - toUtcDate(start)) / MS_PER_DAY)
+const firstDateKey = toDateKey(hotel.currentBusinessDate) || toIsoDate(new Date())
+const secondDateKey = addDateKeyDays(firstDateKey, 1)
 
 const bookingResult = ref({ tone: '', text: '' })
 const createRoomSelection = () => ({
@@ -37,11 +57,9 @@ const availableRooms = computed(() =>
 )
 
 const bookingMinDate = computed(() => `${firstDateKey} 00:00`)
-const bookingMaxDate = computed(() => `${lastDateKey} 23:59`)
 const bookingMinCheckOut = computed(() => {
   const currentDateKey = toDateKey(bookingForm.checkIn)
-  const currentIndex = hotel.calendarDates.findIndex((day) => day.key === currentDateKey)
-  const nextDateKey = hotel.calendarDates[currentIndex + 1]?.key ?? currentDateKey
+  const nextDateKey = addDateKeyDays(currentDateKey || firstDateKey, 1)
   return `${nextDateKey} 12:00`
 })
 
@@ -68,14 +86,14 @@ const roomSelectionInfo = (index) =>
   availableRooms.value.find((item) => item.room === bookingForm.roomSelections[index]?.room) ?? null
 
 const stayLength = computed(() => {
-  const startIndex = hotel.calendarDates.findIndex((day) => day.key === toDateKey(bookingForm.checkIn))
-  const endIndex = hotel.calendarDates.findIndex((day) => day.key === toDateKey(bookingForm.checkOut))
+  const startDateKey = toDateKey(bookingForm.checkIn)
+  const endDateKey = toDateKey(bookingForm.checkOut)
 
-  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+  if (!startDateKey || !endDateKey || endDateKey <= startDateKey) {
     return 0
   }
 
-  return endIndex - startIndex
+  return Math.max(0, diffDateKeys(startDateKey, endDateKey))
 })
 
 const amountPreview = computed(() => {
@@ -163,12 +181,12 @@ const submitBooking = () => {
   bookingResult.value = { tone: '', text: '' }
 
   if (!bookingForm.guest.trim()) {
-    bookingResult.value = { tone: 'error', text: 'Nama tamu wajib diisi.' }
+    bookingResult.value = { tone: 'error', text: 'Guest name is required.' }
     return
   }
 
   if (!normalizedRoomDetails.value.length) {
-    bookingResult.value = { tone: 'error', text: 'Pilih minimal satu kamar.' }
+    bookingResult.value = { tone: 'error', text: 'Select at least one room.' }
     return
   }
 
@@ -187,7 +205,7 @@ const submitBooking = () => {
   } catch (error) {
     bookingResult.value = {
       tone: 'error',
-      text: error instanceof Error ? error.message : 'Gagal membuat booking.',
+      text: error instanceof Error ? error.message : 'Failed to create booking.',
     }
   }
 }
@@ -207,7 +225,7 @@ const submitBooking = () => {
       <div class="booking-form-grid">
         <label class="field-stack">
           <span>Guest name</span>
-          <input v-model="bookingForm.guest" class="form-control" placeholder="Contoh: Dimas Pratama" />
+          <input v-model="bookingForm.guest" class="form-control" placeholder="Example: Dimas Pratama" />
         </label>
 
         <label class="field-stack">
@@ -215,7 +233,6 @@ const submitBooking = () => {
           <DateTimePickerField
             v-model="bookingForm.checkIn"
             :min-date="bookingMinDate"
-            :max-date="bookingMaxDate"
             placeholder="Select check-in date and time"
           />
         </label>
@@ -225,7 +242,6 @@ const submitBooking = () => {
           <DateTimePickerField
             v-model="bookingForm.checkOut"
             :min-date="bookingMinCheckOut"
-            :max-date="bookingMaxDate"
             placeholder="Select check-out date and time"
           />
         </label>
@@ -277,7 +293,7 @@ const submitBooking = () => {
                       {{ roomSelectionInfo(index).roomType }} | {{ roomSelectionInfo(index).flag }} | {{ roomSelectionInfo(index).hk }}
                     </template>
                     <template v-else>
-                      Pilih kamar untuk melihat room type dan housekeeping info.
+                      Select a room to view the room type and housekeeping info.
                     </template>
                   </p>
                 </div>
@@ -302,7 +318,7 @@ const submitBooking = () => {
           <textarea
             v-model="bookingForm.note"
             class="form-control form-textarea"
-            placeholder="Pickup, decor, payment note, atau request tamu"
+            placeholder="Pickup, decor, payment note, or guest request"
           ></textarea>
         </label>
       </div>

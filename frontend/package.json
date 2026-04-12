@@ -14,8 +14,10 @@
     "jquery": "^3.7.1",
     "pinia": "^3.0.4",
     "select2": "^4.1.0-rc.0",
+    "sweetalert2": "^11.26.24",
     "vue": "^3.5.30",
-    "vue-router": "^5.0.3"
+    "vue-router": "^5.0.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.5",

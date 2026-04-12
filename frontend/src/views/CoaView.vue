@@ -26,16 +26,16 @@ const accounts = ref([])
 const categoryOptions = ['All', 'Asset', 'Liability', 'Equity', 'Revenue', 'Expense']
 const normalBalanceOptions = ['Debit', 'Credit']
 const categoryLabels = {
-  All: 'Semua',
-  Asset: 'Aset',
-  Liability: 'Liabilitas',
-  Equity: 'Ekuitas',
-  Revenue: 'Pendapatan',
-  Expense: 'Biaya',
+  All: 'All',
+  Asset: 'Asset',
+  Liability: 'Liability',
+  Equity: 'Equity',
+  Revenue: 'Revenue',
+  Expense: 'Expense',
 }
 const normalBalanceLabels = {
   Debit: 'Debit',
-  Credit: 'Kredit',
+  Credit: 'Credit',
 }
 
 const coaForm = reactive({
@@ -84,11 +84,11 @@ const loadCoaAccounts = async () => {
     sourceLabel.value = 'Database'
     formResult.value = { tone: '', text: '' }
   } catch (error) {
-    sourceLabel.value = 'Store lokal'
+    sourceLabel.value = 'Local store'
     accounts.value = hotel.coaList
     formResult.value = {
       tone: 'error',
-      text: 'Gagal mengambil COA dari database. Menampilkan data lokal sementara.',
+      text: 'Failed to load COA from the database. Showing temporary local data.',
     }
   } finally {
     loading.value = false
@@ -136,10 +136,10 @@ const submitForm = async () => {
   try {
     if (modalMode.value === 'create') {
       const response = await api.post('/coa-accounts', { ...coaForm })
-      formResult.value = { tone: 'success', text: response.data?.message ?? `COA ${coaForm.code} berhasil ditambahkan.` }
+      formResult.value = { tone: 'success', text: response.data?.message ?? `COA ${coaForm.code} was added successfully.` }
     } else {
       const response = await api.put(`/coa-accounts/${editingCode.value}`, { ...coaForm })
-      formResult.value = { tone: 'success', text: response.data?.message ?? `COA ${editingCode.value} berhasil diperbarui.` }
+      formResult.value = { tone: 'success', text: response.data?.message ?? `COA ${editingCode.value} was updated successfully.` }
     }
 
     showModal.value = false
@@ -147,7 +147,7 @@ const submitForm = async () => {
   } catch (error) {
     formResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message ?? (error instanceof Error ? error.message : 'Gagal menyimpan COA.'),
+      text: error?.response?.data?.message ?? (error instanceof Error ? error.message : 'Failed to save COA.'),
     }
   } finally {
     saving.value = false
@@ -186,11 +186,11 @@ onMounted(async () => {
 <template>
   <section class="page-grid two">
     <article class="panel-card panel-dense">
-      <LoadingState v-if="loading" label="Memuat data COA dari database..." overlay />
+      <LoadingState v-if="loading" label="Loading COA data from the database..." overlay />
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Ringkasan akun</p>
-          <h3>Ringkasan chart of accounts</h3>
+          <p class="eyebrow-dark">Account summary</p>
+          <h3>Chart of accounts summary</h3>
         </div>
         <span class="status-badge info">{{ pagination.total || hotel.coaList.length }} COA | {{ sourceLabel }}</span>
       </div>
@@ -198,7 +198,7 @@ onMounted(async () => {
       <div class="booking-inline-summary">
         <div v-for="item in categorySummary" :key="item.label" class="note-cell">
           <strong>{{ categoryLabels[item.label] }}</strong>
-          <p class="subtle">{{ item.count }} akun</p>
+          <p class="subtle">{{ item.count }} accounts</p>
         </div>
       </div>
     </article>
@@ -206,16 +206,16 @@ onMounted(async () => {
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Kontrol COA</p>
-          <h3>Aksi master akun</h3>
+          <p class="eyebrow-dark">COA controls</p>
+          <h3>Account master actions</h3>
         </div>
-        <button class="action-button primary" @click="openCreateModal">Tambah COA</button>
+        <button class="action-button primary" @click="openCreateModal">Add COA</button>
       </div>
 
       <div class="compact-list">
         <div class="list-row list-row-tight">
           <strong>Mapping piutang</strong>
-          <p class="subtle">Pakai COA aset untuk piutang kamar, deposit, dan settlement tamu.</p>
+          <p class="subtle">Use asset COA for room receivables, deposits, and guest settlement.</p>
         </div>
         <div class="list-row list-row-tight">
           <strong>Mapping pendapatan</strong>
@@ -223,7 +223,7 @@ onMounted(async () => {
         </div>
         <div class="list-row list-row-tight">
           <strong>Kas dan bank</strong>
-          <p class="subtle">Gunakan akun kas/bank untuk posting pembayaran dari invoice.</p>
+          <p class="subtle">Use cash and bank accounts for posting payments from invoices.</p>
         </div>
       </div>
     </article>
@@ -233,12 +233,12 @@ onMounted(async () => {
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Daftar master COA</p>
+          <p class="eyebrow-dark">COA master list</p>
           <h3>Chart of accounts</h3>
         </div>
         <div class="kpi-inline">
-          <span>{{ filteredAccounts.length }} akun terlihat</span>
-          <span>{{ pagination.total || hotel.coaList.length }} total akun</span>
+          <span>{{ filteredAccounts.length }} visible accounts</span>
+          <span>{{ pagination.total || hotel.coaList.length }} total accounts</span>
         </div>
       </div>
 
@@ -257,7 +257,7 @@ onMounted(async () => {
         <input
           v-model="search"
           class="toolbar-search"
-          placeholder="Cari kode / akun / kategori"
+          placeholder="Search code / account / category"
         />
       </div>
 
@@ -265,26 +265,26 @@ onMounted(async () => {
         {{ formResult.text }}
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
-            <th>Kode</th>
-            <th>Nama akun</th>
-            <th>Kategori</th>
-            <th>Saldo normal</th>
+            <th>Code</th>
+            <th>Account name</th>
+            <th>Category</th>
+            <th>Normal balance</th>
             <th>Status</th>
-            <th>Aksi</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading">
             <td colspan="6" class="table-loading-cell">
-              <LoadingState label="Sedang mengambil data COA dari database..." />
+              <LoadingState label="Loading COA data from the database..." />
             </td>
           </tr>
           <tr v-else-if="!filteredAccounts.length">
             <td colspan="6" class="table-empty-cell">
-              Tidak ada data COA yang cocok.
+              No matching COA data found.
             </td>
           </tr>
           <tr v-for="item in filteredAccounts" :key="item.code">
@@ -292,7 +292,7 @@ onMounted(async () => {
             <td>{{ item.name }}</td>
             <td>{{ categoryLabels[item.category] }}</td>
             <td>{{ normalBalanceLabels[item.normalBalance] }}</td>
-            <td>{{ item.active ? 'Aktif' : 'Nonaktif' }}</td>
+            <td>{{ item.active ? 'Active' : 'Inactive' }}</td>
             <td>
               <button class="action-button" @click="openEditModal(item)">Edit</button>
             </td>
@@ -300,45 +300,40 @@ onMounted(async () => {
         </tbody>
       </table>
 
-      <div class="modal-actions" style="margin-top: 16px;">
-        <button class="action-button" :disabled="pagination.page <= 1" @click="goToPage(pagination.page - 1)">Prev</button>
-        <span class="subtle">Halaman {{ pagination.page }} / {{ pagination.lastPage }}</span>
-        <button class="action-button" :disabled="pagination.page >= pagination.lastPage" @click="goToPage(pagination.page + 1)">Next</button>
-      </div>
     </article>
   </section>
 
   <div v-if="showModal" class="modal-backdrop" @click.self="closeModal()">
     <section class="modal-card">
-      <LoadingState v-if="saving" label="Menyimpan COA..." overlay />
+      <LoadingState v-if="saving" label="Saving COA..." overlay />
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">COA master</p>
-          <h3>{{ modalMode === 'create' ? 'Tambah COA' : `Edit COA ${editingCode}` }}</h3>
+          <h3>{{ modalMode === 'create' ? 'Add COA' : `Edit COA ${editingCode}` }}</h3>
         </div>
-        <button class="action-button" @click="closeModal()">Tutup</button>
+        <button class="action-button" @click="closeModal()">Close</button>
       </div>
 
       <div class="booking-form-grid">
         <label class="field-stack">
           <span>Kode</span>
-          <input v-model="coaForm.code" class="form-control" :disabled="modalMode === 'edit'" placeholder="Contoh: 4-1101" />
+          <input v-model="coaForm.code" class="form-control" :disabled="modalMode === 'edit'" placeholder="Example: 4-1101" />
         </label>
 
         <label class="field-stack">
-          <span>Nama akun</span>
-          <input v-model="coaForm.name" class="form-control" placeholder="Contoh: Room Revenue - Deluxe Garden" />
+          <span>Account name</span>
+          <input v-model="coaForm.name" class="form-control" placeholder="Example: Room Revenue - Deluxe Garden" />
         </label>
 
         <label class="field-stack">
-          <span>Kategori</span>
+          <span>Category</span>
           <select v-model="coaForm.category" class="form-control">
             <option v-for="item in categoryOptions.filter((option) => option !== 'All')" :key="item" :value="item">{{ categoryLabels[item] }}</option>
           </select>
         </label>
 
         <label class="field-stack">
-          <span>Saldo normal</span>
+          <span>Normal balance</span>
           <select v-model="coaForm.normalBalance" class="form-control">
             <option v-for="item in normalBalanceOptions" :key="item" :value="item">{{ normalBalanceLabels[item] }}</option>
           </select>
@@ -349,23 +344,23 @@ onMounted(async () => {
           <textarea
             v-model="coaForm.note"
             class="form-control form-textarea"
-            placeholder="Keterangan akun untuk mapping operasional hotel"
+            placeholder="Account description for hotel operational mapping"
           ></textarea>
         </label>
 
         <label class="field-stack">
           <span>Status</span>
           <select v-model="coaForm.active" class="form-control">
-            <option :value="true">Aktif</option>
-            <option :value="false">Nonaktif</option>
+            <option :value="true">Active</option>
+            <option :value="false">Inactive</option>
           </select>
         </label>
       </div>
 
       <div class="modal-actions">
-        <button class="action-button" :disabled="saving" @click="closeModal()">Batal</button>
+        <button class="action-button" :disabled="saving" @click="closeModal()">Cancel</button>
         <button class="action-button primary" :disabled="saving" @click="submitForm">
-          {{ saving ? 'Menyimpan...' : 'Simpan COA' }}
+          {{ saving ? 'Saving...' : 'Save COA' }}
         </button>
       </div>
     </section>

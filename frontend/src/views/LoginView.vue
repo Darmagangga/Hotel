@@ -6,7 +6,7 @@ import { useHotelStore } from '../stores/hotel'
 const router = useRouter()
 const hotel = useHotelStore()
 
-const email = ref('')
+const username = ref('')
 const password = ref('')
 const errorMsg = ref(null)
 const loading = ref(false)
@@ -16,10 +16,10 @@ const handleLogin = async () => {
   loading.value = true
   
   try {
-    await hotel.login(email.value, password.value)
+    await hotel.login(username.value, password.value)
     router.push({ name: 'dashboard' })
   } catch (err) {
-    errorMsg.value = err.message || 'Login gagal. Periksa kembali email dan password Anda.'
+    errorMsg.value = err.message || 'Login failed. Please check your username and password.'
   } finally {
     loading.value = false
   }
@@ -33,7 +33,7 @@ const handleLogin = async () => {
       <!-- Kiri: Brand & Graphic -->
       <div class="login-hero">
         <div class="hero-content">
-          <h1>Sagara Bay Suites</h1>
+          <h1>Udara Hideaway Villa</h1>
           <p>Enterprise Property Management System (PMS)<br/>Powered by Advanced Automations.</p>
         </div>
       </div>
@@ -42,30 +42,30 @@ const handleLogin = async () => {
       <div class="login-form-container">
         <div class="login-card">
           <div style="margin-bottom: 2rem;">
-            <p class="eyebrow-dark">Selamat Datang</p>
-            <h2 style="font-size: 2rem; color: var(--text-main);">Masuk ke Portal</h2>
+            <p class="eyebrow-dark">Welcome</p>
+            <h2 style="font-size: 2rem; color: var(--text-main);">Sign In to the Portal</h2>
           </div>
 
           <form @submit.prevent="handleLogin" class="booking-form-grid" style="gap: 1.5rem; max-width: 100%;">
             <label class="field-stack" style="grid-column: span 1 / span 2;">
-              <span>Alamat Email</span>
+              <span>Username</span>
               <input 
-                v-model="email" 
-                type="email" 
+                v-model="username" 
+                type="text" 
                 required 
                 class="form-control" 
-                placeholder="cth: admin@sagarabay.com" 
+                placeholder="e.g. admin / fo / hk" 
               />
             </label>
 
             <label class="field-stack" style="grid-column: span 1 / span 2;">
-              <span>Kata Sandi</span>
+              <span>Password</span>
               <input 
                 v-model="password" 
                 type="password" 
                 required 
                 class="form-control" 
-                placeholder="Masukkan kata sandi..." 
+                placeholder="Enter your password..." 
               />
             </label>
 
@@ -74,7 +74,7 @@ const handleLogin = async () => {
             </div>
 
             <button type="submit" class="action-button primary" style="grid-column: span 1 / span 2; justify-content: center; padding: 1rem;" :disabled="loading">
-              {{ loading ? 'Otentikasi...' : 'Masuk Sekarang' }}
+              {{ loading ? 'Authenticating...' : 'Sign In' }}
             </button>
           </form>
 

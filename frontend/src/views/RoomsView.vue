@@ -15,6 +15,7 @@ const loading = ref(false)
 const saving = ref(false)
 const roomMasters = ref([])
 const roomTypeItems = ref([])
+const housekeepingQueue = ref([])
 const pagination = reactive({
   page: 1,
   perPage: 12,
@@ -48,17 +49,6 @@ const groupedRackRows = computed(() => {
 
   return [...groups.entries()].map(([floor, cells]) => ({ floor, cells }))
 })
-const housekeepingQueue = computed(() =>
-  roomMasters.value
-    .filter((room) => ['Cleaning', 'Dirty', 'Blocked', 'Maintenance'].includes(String(room.status ?? '')))
-    .map((room) => ({
-      room: room.code,
-      task: room.note || `Follow up status ${room.status}`,
-      eta: room.status === 'Cleaning' ? 'Housekeeping queue' : 'Need inspection',
-      owner: room.status === 'Maintenance' ? 'Engineering' : 'Housekeeping',
-    })),
-)
-
 const receivableCoaOptions = computed(() => {
   const options = hotel.coaList
     .filter((account) => account.category === 'Asset')
@@ -156,10 +146,41 @@ const loadRooms = async () => {
   } catch (error) {
     roomResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message ?? 'Gagal mengambil data master kamar dari database.',
+      text: error?.response?.data?.message ?? 'Failed to load room master data from the database.',
     }
   } finally {
     loading.value = false
+  }
+}
+
+const loadHousekeepingQueue = async () => {
+  try {
+    const response = await api.get('/housekeeping/queue')
+    housekeepingQueue.value = Array.isArray(response.data?.data) ? response.data.data : []
+  } catch (error) {
+    roomResult.value = {
+      tone: 'error',
+      text: error?.response?.data?.message ?? 'Failed to load the housekeeping turnaround queue.',
+    }
+    housekeepingQueue.value = []
+  }
+}
+
+const updateHousekeepingTask = async (item, status) => {
+  roomResult.value = { tone: '', text: '' }
+
+  try {
+    const response = await api.patch(`/housekeeping/tasks/${item.id}`, { status })
+    roomResult.value = {
+      tone: 'success',
+      text: response.data?.message ?? `Housekeeping task for room ${item.room} was updated successfully.`,
+    }
+    await Promise.all([loadRooms(), loadHousekeepingQueue()])
+  } catch (error) {
+    roomResult.value = {
+      tone: 'error',
+      text: error?.response?.data?.message ?? (error instanceof Error ? error.message : 'Failed to update the housekeeping task.'),
+    }
   }
 }
 
@@ -178,7 +199,7 @@ const submitRoom = async () => {
 
       roomResult.value = {
         tone: 'success',
-        text: response.data?.message ?? `Master kamar ${editingCode.value} berhasil diperbarui.`,
+        text: response.data?.message ?? `Room master ${editingCode.value} was updated successfully.`,
       }
     } else {
       const response = await api.post('/rooms', {
@@ -191,7 +212,7 @@ const submitRoom = async () => {
 
       roomResult.value = {
         tone: 'success',
-        text: response.data?.message ?? `Master kamar ${roomForm.code} berhasil ditambahkan.`,
+        text: response.data?.message ?? `Room master ${roomForm.code} was added successfully.`,
       }
     }
 
@@ -200,7 +221,7 @@ const submitRoom = async () => {
   } catch (error) {
     roomResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message ?? (error instanceof Error ? error.message : 'Gagal menyimpan master kamar.'),
+      text: error?.response?.data?.message ?? (error instanceof Error ? error.message : 'Failed to save the room master.'),
     }
   } finally {
     saving.value = false
@@ -228,26 +249,26 @@ watch(roomSearch, () => {
 
 onMounted(async () => {
   await loadRoomDependencies()
-  await loadRooms()
+  await Promise.all([loadRooms(), loadHousekeepingQueue()])
 })
 </script>
 
 <template>
   <section class="panel-card panel-dense">
-    <LoadingState v-if="loading" label="Memuat data kamar dari database..." overlay />
+    <LoadingState v-if="loading" label="Loading room data from the database..." overlay />
     <div class="panel-head panel-head-tight">
       <div>
-        <p class="eyebrow-dark">Daftar master kamar</p>
-        <h3>Daftar kamar</h3>
+        <p class="eyebrow-dark">Room master list</p>
+        <h3>Rooms</h3>
       </div>
       <div class="topbar-actions">
         <input
           v-model="roomSearch"
           class="toolbar-search"
-          placeholder="Cari kode / nama / tipe / COA"
+          placeholder="Search code / name / type / COA"
         />
         <button class="action-button primary" @click="openCreateRoomModal">
-          Tambah room master
+          Add room master
         </button>
       </div>
     </div>
@@ -256,61 +277,58 @@ onMounted(async () => {
       {{ roomResult.text }}
     </div>
 
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Kode</th>
-          <th>Nama kamar</th>
-          <th>Tipe</th>
-          <th>COA piutang</th>
-          <th>COA pendapatan</th>
-          <th>Status</th>
-          <th>Aksi</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="room in filteredRoomMasters" :key="room.code">
-          <td><strong>{{ room.code }}</strong></td>
-          <td>{{ room.name }}</td>
-          <td>{{ room.type }}</td>
-          <td>{{ room.coaReceivable }}</td>
-          <td>{{ room.coaRevenue }}</td>
-          <td>{{ room.status }}</td>
-          <td>
-            <button class="action-button" @click="editRoom(room)">Edit</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-
-    <div class="modal-actions" style="margin-top: 16px;">
-      <button class="action-button" :disabled="pagination.page <= 1" @click="goToPage(pagination.page - 1)">Prev</button>
-      <span class="subtle">Halaman {{ pagination.page }} / {{ pagination.lastPage }} | {{ pagination.total }} kamar</span>
-      <button class="action-button" :disabled="pagination.page >= pagination.lastPage" @click="goToPage(pagination.page + 1)">Next</button>
+    <div class="table-scroll">
+      <table v-smart-table class="data-table room-master-table">
+        <thead>
+          <tr>
+            <th>Code</th>
+            <th>Room name</th>
+            <th>Type</th>
+            <th>Receivable COA</th>
+            <th>Revenue COA</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="room in filteredRoomMasters" :key="room.code">
+            <td><strong>{{ room.code }}</strong></td>
+            <td>{{ room.name }}</td>
+            <td>{{ room.type }}</td>
+            <td>{{ room.coaReceivable }}</td>
+            <td>{{ room.coaRevenue }}</td>
+            <td>{{ room.status }}</td>
+            <td>
+              <button class="action-button" @click="editRoom(room)">Edit</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
+
   </section>
 
   <section class="page-grid two">
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Tampilan kamar</p>
+          <p class="eyebrow-dark">Room view</p>
           <h3>Monitor room rack</h3>
         </div>
         <div class="kpi-inline">
-          <span>VC kamar kosong siap jual</span>
-          <span>OC sedang terisi</span>
+          <span>VC vacant clean ready to sell</span>
+          <span>OC occupied</span>
           <span>OOO out of order</span>
         </div>
       </div>
 
       <div class="table-toolbar">
         <div class="toolbar-tabs">
-          <button class="toolbar-tab active">Tampilan stay</button>
-          <button class="toolbar-tab">Tampilan kamar</button>
-          <button class="toolbar-tab">Tampilan cepat</button>
+          <button class="toolbar-tab active">Stay view</button>
+          <button class="toolbar-tab">Room view</button>
+          <button class="toolbar-tab">Quick view</button>
         </div>
-        <div class="toolbar-search">Cari kamar / tamu / lantai</div>
+        <div class="toolbar-search">Search rooms / guests / floors</div>
       </div>
 
       <div class="rack-board">
@@ -343,39 +361,50 @@ onMounted(async () => {
         <span class="status-badge warning">{{ housekeepingQueue.length }} rooms pending</span>
       </div>
 
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Room</th>
-            <th>Task</th>
-            <th>ETA</th>
-            <th>Owner</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in housekeepingQueue" :key="item.room">
-            <td><strong>{{ item.room }}</strong></td>
-            <td>{{ item.task }}</td>
-            <td>{{ item.eta }}</td>
-            <td>{{ item.owner }}</td>
-          </tr>
-          <tr v-if="!housekeepingQueue.length">
-            <td colspan="4" class="table-empty-cell">Tidak ada kamar yang butuh follow-up housekeeping saat ini.</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table v-smart-table class="data-table room-master-table">
+          <thead>
+            <tr>
+              <th>Room</th>
+              <th>Task</th>
+              <th>ETA</th>
+              <th>Owner</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in housekeepingQueue" :key="item.id">
+              <td><strong>{{ item.room }}</strong></td>
+              <td>{{ item.task }}</td>
+              <td>{{ item.eta }}</td>
+              <td>{{ item.owner }}</td>
+              <td>{{ item.status }}</td>
+              <td>
+                <div class="modal-actions">
+                  <button v-if="item.canStart" class="action-button" @click="updateHousekeepingTask(item, 'in_progress')">Start</button>
+                  <button v-if="item.canComplete" class="action-button primary" @click="updateHousekeepingTask(item, 'done')">Done</button>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="!housekeepingQueue.length">
+              <td colspan="6" class="table-empty-cell">There are no rooms requiring housekeeping follow-up right now.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </article>
   </section>
 
   <section class="panel-card panel-dense">
     <div class="panel-head panel-head-tight">
       <div>
-        <p class="eyebrow-dark">Catatan kamar</p>
-        <h3>Status kamar dan housekeeping</h3>
+        <p class="eyebrow-dark">Room notes</p>
+        <h3>Room and housekeeping status</h3>
       </div>
       <div class="kpi-inline">
-        <span>{{ housekeepingQueue.length }} kamar dalam turnaround</span>
-        <span>{{ filteredRoomMasters.filter((room) => ['Blocked', 'Maintenance'].includes(String(room.status ?? ''))).length }} kamar diblokir / maintenance</span>
+        <span>{{ housekeepingQueue.length }} rooms in turnaround</span>
+        <span>{{ filteredRoomMasters.filter((room) => ['Blocked', 'Maintenance'].includes(String(room.status ?? ''))).length }} rooms blocked / maintenance</span>
       </div>
     </div>
 
@@ -389,8 +418,8 @@ onMounted(async () => {
           <span class="status-dot" :class="room.status"></span>
         </div>
         <p class="subtle">{{ room.type }}</p>
-        <p class="subtle">COA piutang: {{ room.coaReceivable }}</p>
-        <p class="subtle">COA pendapatan: {{ room.coaRevenue }}</p>
+        <p class="subtle">Receivable COA: {{ room.coaReceivable }}</p>
+        <p class="subtle">Revenue COA: {{ room.coaRevenue }}</p>
         <div class="split-row" style="margin-top: 14px;">
           <span>{{ room.hk }}</span>
           <span>{{ room.note }}</span>
@@ -401,79 +430,79 @@ onMounted(async () => {
 
   <div v-if="showRoomModal" class="modal-backdrop" @click.self="closeRoomModal()">
     <section class="modal-card">
-      <LoadingState v-if="saving" label="Menyimpan master kamar..." overlay />
+      <LoadingState v-if="saving" label="Saving room master..." overlay />
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">Room master</p>
-          <h3>{{ editingCode ? `Edit kamar ${editingCode}` : 'Tambah master kamar' }}</h3>
+          <h3>{{ editingCode ? `Edit room ${editingCode}` : 'Add room master' }}</h3>
         </div>
-        <button class="action-button" @click="closeRoomModal()">Tutup</button>
+        <button class="action-button" @click="closeRoomModal()">Close</button>
       </div>
 
       <div class="booking-form-grid">
         <label class="field-stack">
-          <span>Kode kamar</span>
+          <span>Room code</span>
           <input
             v-model="roomForm.code"
             class="form-control"
             :disabled="Boolean(editingCode)"
-            placeholder="Contoh: 301"
+            placeholder="Example: 301"
           />
         </label>
 
         <label class="field-stack">
-          <span>Nama kamar</span>
+          <span>Room name</span>
           <input
             v-model="roomForm.name"
             class="form-control"
-            placeholder="Contoh: Deluxe Garden 301"
+            placeholder="Example: Deluxe Garden 301"
           />
         </label>
 
         <label class="field-stack">
-          <span>Tipe kamar</span>
+          <span>Room type</span>
           <select v-model="roomForm.roomTypeId" class="form-control">
-            <option value="">Pilih tipe kamar</option>
+            <option value="">Select room type</option>
             <option v-for="item in roomTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </label>
 
         <label class="field-stack field-span-2">
-          <span>COA piutang</span>
+          <span>Receivable COA</span>
           <Select2Field
             v-model="roomForm.coaReceivableCode"
             :options="receivableCoaOptions"
             :multiple="false"
-            placeholder="Pilih COA piutang"
+            placeholder="Select receivable COA"
           />
         </label>
 
         <label class="field-stack field-span-2">
-          <span>COA pendapatan</span>
+          <span>Revenue COA</span>
           <Select2Field
             v-model="roomForm.coaRevenueCode"
             :options="revenueCoaOptions"
             :multiple="false"
-            placeholder="Pilih COA pendapatan"
+            placeholder="Select revenue COA"
           />
         </label>
       </div>
 
       <div class="booking-inline-summary">
         <div class="note-cell">
-          <strong>Mode edit</strong>
+          <strong>Edit mode</strong>
           <p class="subtle">
             <template v-if="editingCode">
-              Sedang mengedit master kamar {{ editingCode }}. Kode kamar dikunci agar referensi booking tetap aman.
+              You are editing room master {{ editingCode }}. The room code is locked to keep booking references safe.
             </template>
             <template v-else>
-              Buat kamar baru dengan kode unik, pilih tipe kamar, lalu hubungkan ke COA piutang dan pendapatan yang sesuai.
+              Create a new room with a unique code, choose a room type, then connect the matching receivable and revenue COA.
             </template>
           </p>
         </div>
         <div class="note-cell">
-          <strong>Integrasi keuangan</strong>
-          <p class="subtle">COA piutang dipakai untuk tagihan kamar, sedangkan COA pendapatan dipakai untuk pengakuan revenue kamar.</p>
+          <strong>Finance integration</strong>
+          <p class="subtle">The receivable COA is used for room billing, while the revenue COA is used for room revenue recognition.</p>
         </div>
       </div>
 
@@ -484,7 +513,7 @@ onMounted(async () => {
       <div class="modal-actions">
         <button class="action-button" :disabled="saving" @click="closeRoomModal()">Cancel</button>
         <button class="action-button primary" :disabled="saving" @click="submitRoom">
-          {{ saving ? 'Menyimpan...' : (editingCode ? 'Perbarui master kamar' : 'Tambah master kamar') }}
+          {{ saving ? 'Saving...' : (editingCode ? 'Update room master' : 'Add room master') }}
         </button>
       </div>
     </section>

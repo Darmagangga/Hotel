@@ -1,0 +1,13 @@
+{
+  "name": "hotel-book/pdf-runtime",
+  "description": "Standalone DOMPDF runtime for native PHP invoice generation.",
+  "require": {
+    "dompdf/dompdf": "^3.1",
+    "tecnickcom/tcpdf": "^6.11"
+  },
+  "config": {
+    "platform": {
+      "php": "8.1.10"
+    }
+  }
+}

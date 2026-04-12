@@ -13,6 +13,27 @@ const hotel = useHotelStore()
 
 const toDateKey = (value) => String(value ?? '').slice(0, 10)
 const hasDateOverlap = (startA, endA, startB, endB) => startA < endB && startB < endA
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const toUtcDate = (value) => {
+  const [year, month, day] = String(value ?? '')
+    .slice(0, 10)
+    .split('-')
+    .map(Number)
+
+  return new Date(Date.UTC(year, (month || 1) - 1, day || 1))
+}
+const toIsoDate = (date) => {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+const addDateKeyDays = (value, days) => {
+  const date = toUtcDate(value)
+  date.setUTCDate(date.getUTCDate() + days)
+  return toIsoDate(date)
+}
+const diffDateKeys = (start, end) => Math.round((toUtcDate(end) - toUtcDate(start)) / MS_PER_DAY)
 const currencyFormatter = new Intl.NumberFormat('id-ID', {
   style: 'currency',
   currency: 'IDR',
@@ -78,9 +99,8 @@ const formatBookingRate = (value) => {
     maximumFractionDigits: 2,
   }).format(amount)
 }
-const firstDateKey = hotel.calendarDates[0].key
-const secondDateKey = hotel.calendarDates[1].key
-const lastDateKey = hotel.calendarDates[hotel.calendarDates.length - 1].key
+const businessDateKey = computed(() => toDateKey(hotel.currentBusinessDate) || toIsoDate(new Date()))
+const nextBusinessDateKey = computed(() => addDateKeyDays(businessDateKey.value, 1))
 
 const bookingResult = ref({ tone: '', text: '' })
 const saving = ref(false)
@@ -102,8 +122,8 @@ const bookingForm = reactive({
   guest: '',
   phone: '',
   email: '',
-  checkIn: `${firstDateKey} 14:00`,
-  checkOut: `${secondDateKey} 12:00`,
+  checkIn: `${businessDateKey.value} 14:00`,
+  checkOut: `${nextBusinessDateKey.value} 12:00`,
   roomSelections: [createRoomSelection()],
   channel: hotel.bookingChannels[0],
   status: hotel.bookingStatuses[0],
@@ -114,27 +134,25 @@ const bookingForm = reactive({
 
 const editingBookingCode = computed(() => String(route.params.bookingCode ?? '').trim())
 const isEditMode = computed(() => editingBookingCode.value.length > 0)
-const pageTitle = computed(() => (isEditMode.value ? 'Edit reservasi' : 'Booking baru'))
+const pageTitle = computed(() => (isEditMode.value ? 'Edit reservation' : 'New booking'))
 const pageSubtitle = computed(() =>
   isEditMode.value
-    ? 'Perbarui detail reservasi, tanggal menginap, dan assignment kamar tanpa kehilangan konteks operasional.'
-    : 'Buat reservasi baru, pilih kamar yang tersedia, lalu simpan dengan ringkasan tarif yang jelas.',
+    ? 'Update reservation details, stay dates, and room assignments without losing operational context.'
+    : 'Create a new reservation, select available rooms, then save it with a clear rate summary.',
 )
 
 const submitLabel = computed(() => {
   if (saving.value) {
-    return isEditMode.value ? 'Menyimpan perubahan...' : 'Menyimpan...'
+    return isEditMode.value ? 'Saving changes...' : 'Saving...'
   }
 
-  return isEditMode.value ? 'Update reservasi' : 'Simpan reservasi'
+  return isEditMode.value ? 'Update reservation' : 'Save reservation'
 })
 
-const bookingMinDate = computed(() => `${firstDateKey} 00:00`)
-const bookingMaxDate = computed(() => `${lastDateKey} 23:59`)
+const bookingMinDate = computed(() => `${businessDateKey.value} 00:00`)
 const bookingMinCheckOut = computed(() => {
-  const currentDateKey = toDateKey(bookingForm.checkIn)
-  const currentIndex = hotel.calendarDates.findIndex((day) => day.key === currentDateKey)
-  const nextDateKey = hotel.calendarDates[currentIndex + 1]?.key ?? currentDateKey
+  const currentDateKey = toDateKey(bookingForm.checkIn) || businessDateKey.value
+  const nextDateKey = addDateKeyDays(currentDateKey, 1)
   return `${nextDateKey} 12:00`
 })
 
@@ -211,14 +229,14 @@ const normalizedRoomDetails = computed(() =>
 )
 
 const stayLength = computed(() => {
-  const startIndex = hotel.calendarDates.findIndex((day) => day.key === toDateKey(bookingForm.checkIn))
-  const endIndex = hotel.calendarDates.findIndex((day) => day.key === toDateKey(bookingForm.checkOut))
+  const startDateKey = toDateKey(bookingForm.checkIn)
+  const endDateKey = toDateKey(bookingForm.checkOut)
 
-  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+  if (!startDateKey || !endDateKey || endDateKey <= startDateKey) {
     return 0
   }
 
-  return endIndex - startIndex
+  return Math.max(0, diffDateKeys(startDateKey, endDateKey))
 })
 
 const totalAdults = computed(() =>
@@ -273,8 +291,8 @@ const resetBookingForm = () => {
   bookingForm.guest = ''
   bookingForm.phone = ''
   bookingForm.email = ''
-  bookingForm.checkIn = `${firstDateKey} 14:00`
-  bookingForm.checkOut = `${secondDateKey} 12:00`
+  bookingForm.checkIn = `${businessDateKey.value} 14:00`
+  bookingForm.checkOut = `${nextBusinessDateKey.value} 12:00`
   bookingForm.roomSelections = [createRoomSelection()]
   bookingForm.channel = hotel.bookingChannels[0]
   bookingForm.status = hotel.bookingStatuses[0]
@@ -334,7 +352,7 @@ const loadRoomMaster = async () => {
   } catch (error) {
     roomLoadResult.value = {
       tone: 'error',
-      text: 'Gagal mengambil room master dari database. Pilihan kamar dinonaktifkan sampai data berhasil dimuat.',
+      text: 'Failed to load the room master from the database. Room options are disabled until the data is available.',
     }
     roomMasterRows.value = []
   } finally {
@@ -346,8 +364,8 @@ const applyBookingToForm = (booking) => {
   bookingForm.guest = booking.guest ?? ''
   bookingForm.phone = booking.phone ?? ''
   bookingForm.email = booking.email ?? ''
-  bookingForm.checkIn = booking.checkIn ?? `${firstDateKey} 14:00`
-  bookingForm.checkOut = booking.checkOut ?? `${secondDateKey} 12:00`
+  bookingForm.checkIn = booking.checkIn ?? `${businessDateKey.value} 14:00`
+  bookingForm.checkOut = booking.checkOut ?? `${nextBusinessDateKey.value} 12:00`
   bookingForm.channel = booking.channel || hotel.bookingChannels[0]
   bookingForm.status = booking.status || hotel.bookingStatuses[0]
   bookingForm.note = booking.note ?? ''
@@ -377,14 +395,14 @@ const loadBooking = async () => {
     const booking = response.data?.data
 
     if (!booking) {
-      throw new Error('Data reservasi tidak ditemukan.')
+      throw new Error('Reservation data was not found.')
     }
 
     applyBookingToForm(booking)
   } catch (error) {
     bookingResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || error?.message || 'Gagal mengambil data reservasi dari database.',
+      text: error?.response?.data?.message || error?.message || 'Failed to load reservation data from the database.',
     }
   } finally {
     loadingBooking.value = false
@@ -510,12 +528,12 @@ const submitBooking = async () => {
   bookingResult.value = { tone: '', text: '' }
 
   if (!bookingForm.guest.trim()) {
-    bookingResult.value = { tone: 'error', text: 'Nama tamu wajib diisi sebelum membuat reservasi.' }
+    bookingResult.value = { tone: 'error', text: 'Guest name is required before creating a reservation.' }
     return
   }
 
   if (!normalizedRoomDetails.value.length) {
-    bookingResult.value = { tone: 'error', text: 'Pilih minimal satu kamar untuk reservasi ini.' }
+    bookingResult.value = { tone: 'error', text: 'Select at least one room for this reservation.' }
     return
   }
 
@@ -539,15 +557,15 @@ const submitBooking = async () => {
     const booking = response.data?.data
 
     if (!booking) {
-      throw new Error('Respons reservasi tidak valid.')
+      throw new Error('The reservation response is invalid.')
     }
 
     syncLocalBookingState(booking)
     bookingResult.value = {
       tone: 'success',
       text: isEditMode.value
-        ? `Reservasi ${booking.code} berhasil diperbarui di database.`
-        : `Reservasi ${booking.code} berhasil disimpan ke database.`,
+        ? `Reservation ${booking.code} was updated successfully in the database.`
+        : `Reservation ${booking.code} was saved successfully to the database.`,
     }
 
     if (!isEditMode.value) {
@@ -558,7 +576,7 @@ const submitBooking = async () => {
   } catch (error) {
     bookingResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || error?.message || 'Gagal menyimpan reservasi.',
+      text: error?.response?.data?.message || error?.message || 'Failed to save the reservation.',
     }
   } finally {
     saving.value = false
@@ -591,24 +609,24 @@ onMounted(async () => {
 <template>
   <section class="booking-create-shell">
     <article class="booking-create-main">
-      <LoadingState v-if="loadingRooms" label="Memuat room master dari database..." overlay />
-      <LoadingState v-if="loadingBooking" label="Memuat reservasi dari database..." overlay />
+      <LoadingState v-if="loadingRooms" label="Loading room master from the database..." overlay />
+      <LoadingState v-if="loadingBooking" label="Loading reservation from the database..." overlay />
       <div class="booking-create-head">
         <div>
           <p class="eyebrow-dark">Reservation workspace</p>
           <h3>{{ pageTitle }}</h3>
           <p class="subtle">{{ pageSubtitle }}</p>
-          <p v-if="isEditMode" class="subtle">Kode reservasi: <strong>{{ editingBookingCode }}</strong></p>
+          <p v-if="isEditMode" class="subtle">Reservation code: <strong>{{ editingBookingCode }}</strong></p>
         </div>
 
         <div class="booking-create-actions">
-          <button class="action-button" @click="router.push({ name: 'bookings' })">Kembali ke daftar</button>
+          <button class="action-button" @click="router.push({ name: 'bookings' })">Back to list</button>
           <button
             v-if="isEditMode"
             class="action-button"
             @click="router.push({ name: 'booking-create' })"
           >
-            Buat reservasi baru
+            Create new reservation
           </button>
           <button class="action-button primary" :disabled="saving" @click="submitBooking">
             {{ submitLabel }}
@@ -629,19 +647,19 @@ onMounted(async () => {
           <div class="panel-head panel-head-tight">
             <div>
               <p class="eyebrow-dark">Guest profile</p>
-              <h3>Informasi tamu</h3>
+              <h3>Guest information</h3>
             </div>
             <span class="status-badge info">Walk-in / OTA / Direct</span>
           </div>
 
           <div class="booking-form-grid">
             <label class="field-stack field-span-2">
-              <span>Nama tamu</span>
+              <span>Guest name</span>
               <input v-model="bookingForm.guest" class="form-control"  />
             </label>
 
             <label class="field-stack">
-              <span>Telepon</span>
+              <span>Phone</span>
               <input v-model="bookingForm.phone" class="form-control" />
             </label>
 
@@ -656,9 +674,9 @@ onMounted(async () => {
           <div class="panel-head panel-head-tight">
             <div>
               <p class="eyebrow-dark">Stay details</p>
-              <h3>Rincian menginap</h3>
+              <h3>Stay details</h3>
             </div>
-            <span class="status-badge success">{{ stayLength }} malam</span>
+            <span class="status-badge success">{{ stayLength }} night(s)</span>
           </div>
 
           <div class="booking-form-grid">
@@ -667,8 +685,7 @@ onMounted(async () => {
               <DateTimePickerField
                 v-model="bookingForm.checkIn"
                 :min-date="bookingMinDate"
-                :max-date="bookingMaxDate"
-                placeholder="Pilih tanggal check-in"
+                placeholder="Select check-in date"
               />
             </label>
 
@@ -677,8 +694,7 @@ onMounted(async () => {
               <DateTimePickerField
                 v-model="bookingForm.checkOut"
                 :min-date="bookingMinCheckOut"
-                :max-date="bookingMaxDate"
-                placeholder="Pilih tanggal check-out"
+                placeholder="Select check-out date"
               />
             </label>
 
@@ -688,7 +704,7 @@ onMounted(async () => {
                 v-model="bookingForm.channel"
                 :options="hotel.bookingChannels.map((item) => ({ value: item, label: item }))"
                 :multiple="false"
-                placeholder="Pilih source"
+                placeholder="Select source"
               />
             </label>
 
@@ -698,7 +714,7 @@ onMounted(async () => {
                 v-model="bookingForm.status"
                 :options="hotel.bookingStatuses.map((item) => ({ value: item, label: item }))"
                 :multiple="false"
-                placeholder="Pilih status"
+                placeholder="Select status"
               />
             </label>
           </div>
@@ -710,14 +726,14 @@ onMounted(async () => {
           <div>
             <p class="eyebrow-dark">Room assignment</p>
           </div>
-          <span class="status-badge warning">{{ availableRooms.length }} kamar dari room table</span>
+          <span class="status-badge warning">{{ availableRooms.length }} rooms from room table</span>
         </div>
 
         <div class="booking-room-table-head">
           <span>Room</span>
           <span>Adult</span>
           <span>Children</span>
-          <span>Harga</span>
+          <span>Rate</span>
           <span></span>
         </div>
 
@@ -734,7 +750,7 @@ onMounted(async () => {
                   v-model="bookingForm.roomSelections[index].room"
                   :options="roomOptionsForIndex(index)"
                   :multiple="false"
-                  placeholder="Pilih kamar"
+                  placeholder="Select room"
                 />
               </div>
 
@@ -749,7 +765,7 @@ onMounted(async () => {
               </label>
 
               <label class="field-stack booking-room-field">
-                <span class="booking-room-mobile-label">Harga</span>
+                <span class="booking-room-mobile-label">Rate</span>
                 <input
                   :value="displayBookingRate(selection)"
                   class="form-control"
@@ -775,7 +791,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <button type="button" class="action-button" @click="addRoomSelection">Tambah kamar</button>
+          <button type="button" class="action-button" @click="addRoomSelection">Add room</button>
         </div>
       </article>
 
@@ -783,7 +799,7 @@ onMounted(async () => {
         <div class="panel-head panel-head-tight">
           <div>
             <p class="eyebrow-dark">Reservation note</p>
-            <h3>Catatan operasional</h3>
+            <h3>Operational notes</h3>
           </div>
           <span class="status-badge info">FO note</span>
         </div>
@@ -793,7 +809,7 @@ onMounted(async () => {
           <textarea
             v-model="bookingForm.note"
             class="form-control form-textarea booking-create-note"
-            placeholder="Contoh: early check-in, airport pickup, birthday setup, deposit note"
+            placeholder="Example: early check-in, airport pickup, birthday setup, deposit note"
           ></textarea>
         </label>
       </article>
@@ -812,7 +828,7 @@ onMounted(async () => {
         <div class="compact-list">
           <div class="list-row list-row-tight">
             <strong>Guest</strong>
-            <p class="subtle">{{ bookingForm.guest || 'Belum diisi' }}</p>
+            <p class="subtle">{{ bookingForm.guest || 'Not filled in yet' }}</p>
           </div>
           <div class="list-row list-row-tight">
             <strong>Stay range</strong>
@@ -857,10 +873,10 @@ onMounted(async () => {
           </div>
           <div class="list-row list-row-tight">
             <strong>Nights</strong>
-            <p class="subtle">{{ stayLength }} malam</p>
+            <p class="subtle">{{ stayLength }} night(s)</p>
           </div>
         </div>
-        <p v-else class="subtle">Pilih kamar dan rentang tanggal untuk melihat estimasi tarif.</p>
+        <p v-else class="subtle">Select rooms and a date range to see the estimated rate.</p>
       </article>
 
     </aside>

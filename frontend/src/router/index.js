@@ -8,12 +8,14 @@ import FinanceView from '../views/FinanceView.vue'
 import JournalView from '../views/JournalView.vue'
 import CoaView from '../views/CoaView.vue'
 import InventoryView from '../views/InventoryView.vue'
+import InventoryPurchasePosView from '../views/InventoryPurchasePosView.vue'
 import TransportView from '../views/TransportView.vue'
 import ActivitiesView from '../views/ActivitiesView.vue'
 import ReportsView from '../views/ReportsView.vue'
 import LoginView from '../views/LoginView.vue'
 import UsersView from '../views/UsersView.vue'
 import RolesView from '../views/RolesView.vue'
+import SettingsView from '../views/SettingsView.vue'
 
 const routerBase = import.meta.env.PROD ? '/flux/' : '/'
 
@@ -43,16 +45,17 @@ const router = createRouter({
     { path: '/journals', name: 'journals', component: JournalView, meta: { requiresAuth: true, permission: 'journals' } },
     { path: '/coa', name: 'coa', component: CoaView, meta: { requiresAuth: true, permission: 'coa' } },
     { path: '/inventory', name: 'inventory', component: InventoryView, meta: { requiresAuth: true, permission: 'inventory' } },
+    { path: '/inventory/purchases', name: 'inventory-purchases', component: InventoryPurchasePosView, meta: { requiresAuth: true, permission: 'inventory' } },
     { path: '/transport', name: 'transport', component: TransportView, meta: { requiresAuth: true, permission: 'transport' } },
     { path: '/activities', name: 'activities', component: ActivitiesView, meta: { requiresAuth: true, permission: 'activities' } },
     { path: '/reports', name: 'reports', component: ReportsView, meta: { requiresAuth: true, permission: 'reports' } },
+    { path: '/settings', name: 'settings', component: SettingsView, meta: { requiresAuth: true, permission: 'settings' } },
     { path: '/users', name: 'users', component: UsersView, meta: { requiresAuth: true, permission: 'users' } },
     { path: '/roles', name: 'roles', component: RolesView, meta: { requiresAuth: true, permission: 'roles' } },
     { path: '/services', redirect: '/activities' },
   ],
 })
 
-// Authentication Guard
 router.beforeEach((to, from, next) => {
   const hotelStore = useHotelStore()
   const isAuthenticated = !!hotelStore.user

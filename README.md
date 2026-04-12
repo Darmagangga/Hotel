@@ -1,4 +1,4 @@
-# Hotel Book System
+# Udara Hideaway Villa System
 
 Starter blueprint untuk sistem hotel booking berbasis Vue.js di frontend dan PHP di backend.
 

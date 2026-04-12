@@ -78,6 +78,11 @@ const addDays = (value, days) => {
 }
 
 const diffDays = (start, end) => Math.round((toUtcDate(end) - toUtcDate(start)) / MS_PER_DAY)
+const todayDateKey = () => toIsoDate(new Date())
+const buildCurrentDateLabel = (dateKey) => {
+  const date = toUtcDate(dateKey)
+  return `${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })} | Day Shift`
+}
 
 const generateCalendarDates = (startDate, length, businessDate) =>
   Array.from({ length }, (_, index) => {
@@ -136,13 +141,16 @@ const buildBookingStatus = (booking, businessDate) => {
 }
 
 export const useHotelStore = defineStore('hotel', {
-  state: () => ({
+  state: () => {
+    const initialBusinessDate = todayDateKey()
+    const initialCalendarDates = generateCalendarDates(initialBusinessDate, 7, initialBusinessDate)
+    return ({
     user: null,
-    hotelName: 'Sagara Bay Suites',
+    hotelName: 'Udara Hideaway Villa',
     tagline: 'Centralized control for booking, rooms, finance, stock, and guest add-ons.',
-    currentDateLabel: '18 March 2026 | Day Shift',
-    currentBusinessDate: '2026-03-18',
-    calendarBaseDate: '2026-03-17',
+    currentDateLabel: buildCurrentDateLabel(initialBusinessDate),
+    currentBusinessDate: initialBusinessDate,
+    calendarBaseDate: initialBusinessDate,
     overview: [
       { label: 'Occupancy', value: '50%', note: '4 of 8 rooms occupied' },
       { label: 'Arrivals', value: '3', note: 'Priority check-ins before 14:00' },
@@ -815,16 +823,8 @@ export const useHotelStore = defineStore('hotel', {
         note: 'Support late arrival dan charter malam',
       },
     ],
-    calendarRangeLabel: '17 Mar 2026 - 23 Mar 2026',
-    calendarDates: [
-      { key: '2026-03-17', day: 'Tue', date: '17', label: '17 Mar', today: true, weekend: false },
-      { key: '2026-03-18', day: 'Wed', date: '18', label: '18 Mar', today: false, weekend: false },
-      { key: '2026-03-19', day: 'Thu', date: '19', label: '19 Mar', today: false, weekend: false },
-      { key: '2026-03-20', day: 'Fri', date: '20', label: '20 Mar', today: false, weekend: false },
-      { key: '2026-03-21', day: 'Sat', date: '21', label: '21 Mar', today: false, weekend: true },
-      { key: '2026-03-22', day: 'Sun', date: '22', label: '22 Mar', today: false, weekend: true },
-      { key: '2026-03-23', day: 'Mon', date: '23', label: '23 Mar', today: false, weekend: false },
-    ],
+    calendarRangeLabel: buildCalendarRangeLabel(initialCalendarDates),
+    calendarDates: initialCalendarDates,
     stayLegend: [
       { label: 'Confirmed', tone: 'confirmed' },
       { label: 'Arriving', tone: 'arriving' },
@@ -975,7 +975,7 @@ export const useHotelStore = defineStore('hotel', {
       'Close cashier shift and print payment summary.',
       'Sync transport and add-on postings into guest folio.',
     ],
-  }),
+  })},
   getters: {
     coaList: (state) =>
       [...state.coaAccounts].sort((left, right) =>
@@ -1069,6 +1069,9 @@ export const useHotelStore = defineStore('hotel', {
       })
       const bookingCode = booking?.code ?? stayEntry.code
       const addons = this.bookingAddons.filter((item) => item.bookingCode === bookingCode)
+      const bookingScopedAddons = addons.length
+        ? addons
+        : (Array.isArray(booking?.addons) ? booking.addons.map((item) => ({ ...item, bookingCode })) : [])
       const addonsTotalValue = addons.reduce((total, item) => total + item.totalPriceValue, 0)
       const roomAmountValue = booking?.amountValue ?? 0
 
@@ -1087,7 +1090,7 @@ export const useHotelStore = defineStore('hotel', {
         checkOut: booking?.checkOut ?? stayEntry.endKey,
         adults: roomDetails.length ? totalPax(roomDetails, 'adults') : booking?.adults ?? null,
         children: roomDetails.length ? totalPax(roomDetails, 'children') : booking?.children ?? null,
-        addons,
+        addons: bookingScopedAddons,
         addonsTotal: toCurrency(addonsTotalValue),
         addonsTotalValue,
         grandTotal: toCurrency(roomAmountValue + addonsTotalValue),
@@ -1100,14 +1103,17 @@ export const useHotelStore = defineStore('hotel', {
     invoiceList() {
       return this.bookings.map((booking) => {
         const addons = this.bookingAddons.filter((item) => item.bookingCode === booking.code)
+        const bookingScopedAddons = addons.length
+          ? addons
+          : (Array.isArray(booking.addons) ? booking.addons.map((item) => ({ ...item, bookingCode: booking.code })) : [])
         const payments = this.paymentTransactions
           .filter((item) => item.bookingCode === booking.code)
           .sort((left, right) => right.paymentDate.localeCompare(left.paymentDate))
         const roomChargeValue = toNumber(booking.amountValue ?? booking.roomAmountValue)
-        const addonsTotalValue = addons.reduce((total, item) => total + toNumber(item.totalPriceValue), 0)
+        const addonsTotalValue = bookingScopedAddons.reduce((total, item) => total + toNumber(item.totalPriceValue), 0)
         const bookingGrandTotalValue = toNumber(booking.grandTotalValue)
         const subtotalValue = Math.max(roomChargeValue + addonsTotalValue, bookingGrandTotalValue, roomChargeValue)
-        const paidValue = payments.reduce((total, item) => total + toNumber(item.amountValue), 0)
+        const paidValue = payments.reduce((total, item) => total + toNumber(item.signedAmountValue ?? item.amountValue), 0)
         const balanceValue = Math.max(subtotalValue - paidValue, 0)
         const paymentStatus = subtotalValue <= 0
           ? 'Draft'
@@ -1124,7 +1130,7 @@ export const useHotelStore = defineStore('hotel', {
           amountValue: roomChargeValue,
           amount: toCurrency(roomChargeValue),
         }
-        const addonLines = addons.map((item) => ({
+        const addonLines = bookingScopedAddons.map((item) => ({
           id: item.id,
           type: item.addonType,
           label: item.addonLabel,
@@ -1139,11 +1145,14 @@ export const useHotelStore = defineStore('hotel', {
           bookingCode: booking.code,
           guest: booking.guest,
           room: booking.room,
+          roomCount: toNumber(booking.roomCount ?? booking.roomDetails?.length ?? 0),
+          roomDetails: Array.isArray(booking.roomDetails) ? booking.roomDetails : [],
           channel: booking.channel,
           issueDate: booking.issueDate ?? booking.checkIn,
           dueDate: booking.dueDate ?? booking.checkIn,
           checkIn: booking.checkIn,
           checkOut: booking.checkOut,
+          addons: bookingScopedAddons,
           items,
           subtotalValue,
           subtotal: toCurrency(subtotalValue),
@@ -1369,10 +1378,8 @@ export const useHotelStore = defineStore('hotel', {
     availableRooms: (state) => (criteria) => {
       const startDateKey = toDateKey(criteria.checkIn)
       const endDateKey = toDateKey(criteria.checkOut)
-      const startIndex = state.calendarDates.findIndex((day) => day.key === startDateKey)
-      const endIndex = state.calendarDates.findIndex((day) => day.key === endDateKey)
 
-      if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+      if (!startDateKey || !endDateKey || endDateKey <= startDateKey) {
         return []
       }
 
@@ -1381,8 +1388,15 @@ export const useHotelStore = defineStore('hotel', {
         .flatMap((group) =>
           group.rooms
             .filter((room) => {
-              const hasOverlap = room.bookings.some((booking) =>
-                overlap(startIndex, endIndex, booking.start, booking.start + booking.span),
+              const hasOverlap = state.bookings.some((booking) =>
+                Array.isArray(booking.roomDetails)
+                && booking.roomDetails.some((detail) => String(detail?.room ?? '') === room.no)
+                && overlap(
+                  startDateKey,
+                  endDateKey,
+                  toDateKey(booking.checkIn),
+                  toDateKey(booking.checkOut),
+                ),
               )
 
               return !hasOverlap
@@ -1405,10 +1419,14 @@ export const useHotelStore = defineStore('hotel', {
       this.overview = Array.isArray(items) ? items : []
     },
     setBusinessDate(value) {
-      this.currentBusinessDate = String(value ?? '').trim() || this.currentBusinessDate
+      const nextBusinessDate = String(value ?? '').trim() || this.currentBusinessDate
+      this.currentBusinessDate = nextBusinessDate
+      this.calendarBaseDate = nextBusinessDate
+      this.calendarDates = generateCalendarDates(nextBusinessDate, 7, nextBusinessDate)
+      this.calendarRangeLabel = buildCalendarRangeLabel(this.calendarDates)
     },
     setCurrentDateLabel(value) {
-      this.currentDateLabel = String(value ?? '').trim() || this.currentDateLabel
+      this.currentDateLabel = String(value ?? '').trim() || buildCurrentDateLabel(this.currentBusinessDate)
     },
     setBookings(rows) {
       this.bookings = Array.isArray(rows) ? rows : []
@@ -2053,11 +2071,9 @@ export const useHotelStore = defineStore('hotel', {
     createBooking(payload) {
       const startDateKey = toDateKey(payload.checkIn)
       const endDateKey = toDateKey(payload.checkOut)
-      const startIndex = this.calendarDates.findIndex((day) => day.key === startDateKey)
-      const endIndex = this.calendarDates.findIndex((day) => day.key === endDateKey)
 
-      if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
-        throw new Error('Tanggal booking belum valid. Pilih check-in dan check-out di rentang kalender.')
+      if (!startDateKey || !endDateKey || endDateKey <= startDateKey) {
+        throw new Error('Tanggal booking belum valid. Check-in harus lebih awal dari check-out.')
       }
 
       const requestedRoomDetails = payload.roomDetails?.length
@@ -2086,7 +2102,7 @@ export const useHotelStore = defineStore('hotel', {
         throw new Error('Salah satu kamar sudah terpakai pada rentang tanggal tersebut.')
       }
 
-      const nights = endIndex - startIndex
+      const nights = Math.max(1, diffDays(startDateKey, endDateKey))
       const code = this.buildBookingCode(payload.checkIn)
       const roomTypes = [...new Set(roomOptions.map((room) => room.roomType))]
       const roomDetails = requestedRoomDetails.map((detail) => {
@@ -2128,13 +2144,14 @@ export const useHotelStore = defineStore('hotel', {
         const roomOption = roomOptions.find((item) => item.room === roomNo)
         const group = this.stayCalendar.find((item) => item.roomType === roomOption?.roomType)
         const room = group?.rooms.find((item) => item.no === roomNo)
+        const startIndex = this.calendarDates.findIndex((day) => day.key === startDateKey)
 
-        if (room) {
+        if (room && startIndex !== -1) {
           room.bookings.push({
             id: `stay-${roomNo}-${Date.now()}-${index}`,
             start: startIndex,
             span: nights,
-            status: payload.checkIn === this.calendarDates[0].key ? 'arriving' : 'confirmed',
+            status: startDateKey === this.currentBusinessDate ? 'arriving' : 'confirmed',
             guest: payload.guest,
             code,
             source: payload.channel,
@@ -2188,8 +2205,8 @@ export const useHotelStore = defineStore('hotel', {
       const response = await api.post('/night-audit')
       return response.data
     },
-    async login(email, password) {
-      const response = await api.post('/login', { email, password })
+    async login(username, password) {
+      const response = await api.post('/login', { username, password })
       this.user = response.data.user
       localStorage.setItem('pms_token', String(response.data?.token ?? ''))
       localStorage.setItem('pms_user', JSON.stringify(this.user))

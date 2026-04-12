@@ -1,6 +1,6 @@
 # End-to-End Hotel PMS Booking Flow
 
-Dokumen ini menjelaskan alur siklus tamu (Guest Cycle) dan manajemen tagihan (Folio Management) yang diimplementasikan pada HOTEL-BOOK (terinspirasi dari standar industri seperti eZee Absolute).
+Dokumen ini menjelaskan alur siklus tamu (Guest Cycle) dan manajemen tagihan (Folio Management) yang diimplementasikan pada Udara Hideaway Villa (terinspirasi dari standar industri seperti eZee Absolute).
 
 ## 1. Tahap Reservasi (Booking & Pre-arrival)
 * **Penciptaan Booking**: Data pesanan tamu dibuat (via OTA/Website atau manual/walk-in).

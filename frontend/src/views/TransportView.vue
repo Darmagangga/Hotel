@@ -103,7 +103,7 @@ const loadTransportRates = async () => {
   } catch (error) {
     transportResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || error?.message || 'Gagal memuat data transport.',
+      text: error?.response?.data?.message || error?.message || 'Failed to load transport data.',
     }
     transportRates.value = []
     transportManifest.value = []
@@ -128,7 +128,7 @@ const submitTransport = async () => {
 
     transportResult.value = {
       tone: 'success',
-      text: response.data?.message || 'Data transport berhasil disimpan.',
+      text: response.data?.message || 'Transport data saved successfully.',
     }
 
     await loadTransportRates()
@@ -136,7 +136,7 @@ const submitTransport = async () => {
   } catch (error) {
     transportResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Gagal menyimpan data transport.'),
+      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Failed to save transport data.'),
     }
   }
 }
@@ -151,7 +151,7 @@ onMounted(async () => {
     <div class="panel-head panel-head-tight">
       <div>
         <p class="eyebrow-dark">Transport desk</p>
-        <h3>Driver pickup dan drop off</h3>
+        <h3>Pickup and drop-off drivers</h3>
       </div>
       <div class="kpi-inline">
         <span>{{ transportSummary.drivers }} driver</span>
@@ -164,10 +164,10 @@ onMounted(async () => {
       <input
         v-model="transportSearch"
         class="toolbar-search"
-        placeholder="Search driver / kendaraan / harga"
+        placeholder="Search driver / vehicle / rate"
       />
       <button class="action-button primary" @click="openCreateTransportModal">
-        Tambah driver transport
+        Add transport driver
       </button>
     </div>
 
@@ -175,7 +175,7 @@ onMounted(async () => {
       {{ transportResult.text }}
     </div>
 
-    <table class="data-table">
+    <table v-smart-table class="data-table">
       <thead>
         <tr>
           <th>ID</th>
@@ -183,8 +183,8 @@ onMounted(async () => {
           <th>Vehicle</th>
           <th>Pickup</th>
           <th>Drop off</th>
-          <th>Catatan</th>
-          <th>Aksi</th>
+          <th>Notes</th>
+          <th>Action</th>
         </tr>
       </thead>
       <tbody>
@@ -216,15 +216,15 @@ onMounted(async () => {
       <div class="compact-list">
         <div class="list-row list-row-tight">
           <strong>Pickup</strong>
-          <p class="subtle">Gunakan harga pickup untuk penjemputan tamu dari airport, harbour, atau meeting point menuju hotel.</p>
+          <p class="subtle">Use the pickup rate for guest collection from the airport, harbour, or meeting point to the property.</p>
         </div>
         <div class="list-row list-row-tight">
           <strong>Drop off</strong>
-          <p class="subtle">Gunakan harga drop off untuk pengantaran tamu dari hotel ke airport, harbour, atau titik keberangkatan lain.</p>
+          <p class="subtle">Use the drop-off rate for guest transfers from the property to the airport, harbour, or other departure points.</p>
         </div>
         <div class="list-row list-row-tight">
           <strong>Driver assignment</strong>
-          <p class="subtle">Daftar ini bisa dipakai front office saat memilih driver aktif untuk transfer tamu dan posting charge ke folio.</p>
+          <p class="subtle">Front office can use this list to choose active drivers for guest transfers and post charges to the folio.</p>
         </div>
       </div>
     </article>
@@ -251,7 +251,7 @@ onMounted(async () => {
           <p class="subtle">{{ item.service }} | {{ item.pax }} | {{ item.status }}</p>
         </div>
         <p v-if="!transportManifest.length" class="subtle booking-addon-empty">
-          Belum ada add-on transport aktif dari database.
+          No active transport add-ons found in the database.
         </p>
       </div>
     </article>
@@ -262,7 +262,7 @@ onMounted(async () => {
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">Transport setup</p>
-          <h3>{{ editingTransportId ? `Edit driver ${editingTransportId}` : 'Tambah driver transport' }}</h3>
+          <h3>{{ editingTransportId ? `Edit driver ${editingTransportId}` : 'Add transport driver' }}</h3>
         </div>
         <button class="action-button" @click="closeTransportModal()">Close</button>
       </div>
@@ -270,34 +270,34 @@ onMounted(async () => {
       <div class="booking-form-grid">
         <label class="field-stack">
           <span>Driver</span>
-          <input v-model="transportForm.driver" class="form-control" placeholder="Contoh: Made Ariana" />
+          <input v-model="transportForm.driver" class="form-control" placeholder="Example: Made Ariana" />
         </label>
 
         <label class="field-stack">
           <span>Vehicle</span>
-          <input v-model="transportForm.vehicle" class="form-control" placeholder="Contoh: Toyota Avanza" />
+          <input v-model="transportForm.vehicle" class="form-control" placeholder="Example: Toyota Avanza" />
         </label>
 
         <label class="field-stack">
-          <span>Harga pickup</span>
+          <span>Pickup rate</span>
           <input v-model="transportForm.pickupPriceValue" class="form-control" type="number" min="0" step="1000" />
         </label>
 
         <label class="field-stack">
-          <span>Harga drop off</span>
+          <span>Drop-off rate</span>
           <input v-model="transportForm.dropOffPriceValue" class="form-control" type="number" min="0" step="1000" />
         </label>
 
         <label class="field-stack field-span-2">
-          <span>Catatan</span>
-          <textarea v-model="transportForm.note" class="form-control form-textarea" placeholder="Catatan driver, area layanan, atau jam operasional"></textarea>
+          <span>Notes</span>
+          <textarea v-model="transportForm.note" class="form-control form-textarea" placeholder="Driver notes, service area, or operating hours"></textarea>
         </label>
       </div>
 
       <div class="booking-inline-summary">
         <div class="note-cell">
-          <strong>Aturan input</strong>
-          <p class="subtle">Isi driver yang bertugas, lalu tentukan harga pickup dan drop off agar front office bisa posting biaya transport dengan cepat.</p>
+          <strong>Entry rule</strong>
+          <p class="subtle">Enter the assigned driver, then set pickup and drop-off rates so front office can post transport charges quickly.</p>
         </div>
         <div class="note-cell">
           <strong>Pricing check</strong>
@@ -316,7 +316,7 @@ onMounted(async () => {
       <div class="modal-actions">
         <button class="action-button" @click="closeTransportModal()">Cancel</button>
         <button class="action-button primary" @click="submitTransport">
-          {{ editingTransportId ? 'Update driver' : 'Tambah driver' }}
+          {{ editingTransportId ? 'Update driver' : 'Add driver' }}
         </button>
       </div>
     </section>

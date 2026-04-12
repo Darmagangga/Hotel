@@ -55,6 +55,16 @@ const buildCalendarRangeLabel = (dates) => {
   return `${first.label} ${first.key.slice(0, 4)} - ${last.label} ${last.key.slice(0, 4)}`
 }
 
+const formatShortStayDate = (value) => {
+  const dateKey = String(value ?? '').slice(0, 10)
+  if (!dateKey) {
+    return '-'
+  }
+
+  const date = toUtcDate(dateKey)
+  return `${String(date.getUTCDate()).padStart(2, '0')} ${monthNames[date.getUTCMonth()]}`
+}
+
 const firstDateKey = hotel.calendarDates[0].key
 const secondDateKey = hotel.calendarDates[1].key
 const visibleCalendarStart = ref(firstDateKey)
@@ -65,15 +75,29 @@ const loadingBookings = ref(false)
 const loadingRooms = ref(false)
 const bookingsResult = ref({ tone: '', text: '' })
 const addonResult = ref({ tone: '', text: '' })
+const cancellationPolicy = ref({ percent: 0, label: '0', enabled: false })
 const bookings = ref([])
 const roomRows = ref([])
 const selectedBookingCode = ref(hotel.selectedBookingCode ?? '')
 const showInsightModal = ref(false)
 const showAddonModal = ref(false)
 const showAddonListModal = ref(false)
+const showInvoiceModal = ref(false)
+const invoiceDocumentMode = ref('invoice')
 const showPaymentModal = ref(false)
+const showStatusConfirmModal = ref(false)
+const statusConfirmState = ref({
+  bookingCode: '',
+  guest: '',
+  nextStatus: '',
+  title: '',
+  description: '',
+  penaltyText: '',
+  warningText: '',
+  confirmLabel: '',
+})
 
-const paymentMethods = ['Tunai', 'Transfer Bank', 'Kartu Kredit', 'Kartu Debit', 'QRIS']
+const paymentMethods = ['Cash', 'Bank Transfer', 'Credit Card', 'Debit Card', 'QRIS']
 const paymentResult = ref({ tone: '', text: '' })
 const paymentForm = reactive({
   paymentDate: new Date().toISOString().slice(0, 10),
@@ -140,6 +164,87 @@ const selectedBookingBalanceLabel = computed(() => {
   }).format(balanceValue)
 })
 
+const invoicePreview = computed(() => {
+  if (!selectedBooking.value) {
+    return null
+  }
+
+  const booking = selectedBooking.value
+  const startKey = String(booking.checkIn ?? '').slice(0, 10)
+  const endKey = String(booking.checkOut ?? '').slice(0, 10)
+  const nights = Math.max(1, Math.round((toUtcDate(endKey) - toUtcDate(startKey)) / MS_PER_DAY))
+  const addons = Array.isArray(booking.addons) ? booking.addons : []
+  const payments = (hotel.paymentTransactions ?? [])
+    .filter((item) => item.bookingCode === booking.code)
+    .sort((left, right) => right.paymentDate.localeCompare(left.paymentDate))
+  const addonTotalValue = addons.reduce((total, item) => total + Number(item.totalPriceValue ?? 0), 0)
+  const roomTotalValue = Math.max(Number(booking.grandTotalValue ?? 0) - addonTotalValue, 0)
+  const roomDetails = Array.isArray(booking.roomDetails) ? booking.roomDetails : []
+  const roomCount = roomDetails.length || Math.max(1, Number(booking.roomCount ?? 1))
+
+  const roomLines = roomDetails.length
+    ? roomDetails.map((room, index) => {
+        const rateValue = Number(room.rate ?? room.rateValue ?? 0)
+        const totalValue = rateValue > 0 ? rateValue * nights : Math.round(roomTotalValue / roomCount)
+        return {
+          id: `${booking.code}-room-${room.room}-${index}`,
+          room: room.room,
+          roomType: room.roomType,
+          pax: `${Number(room.adults ?? 0)} adult(s), ${Number(room.children ?? 0)} child(ren)`,
+          nights,
+          rateLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(rateValue > 0 ? rateValue : Math.round(totalValue / nights)),
+          totalLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(totalValue),
+        }
+      })
+    : [{
+        id: `${booking.code}-room-main`,
+        room: booking.room || '-',
+        roomType: booking.roomType || '-',
+        pax: `${Number(booking.adults ?? 0)} adult(s), ${Number(booking.children ?? 0)} child(ren)`,
+        nights,
+        rateLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Math.round(roomTotalValue / nights)),
+        totalLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(roomTotalValue),
+      }]
+
+  return {
+    bookingCode: booking.code,
+    invoiceNo: booking.invoiceNo,
+    guest: booking.guest,
+    channel: booking.channel,
+    issueDate: booking.issueDate,
+    dueDate: booking.dueDate,
+    stayLabel: `${formatShortStayDate(startKey)} - ${formatShortStayDate(endKey)}`,
+    nightsLabel: `${nights} night(s)`,
+    roomLabel: booking.room,
+    roomCount: booking.roomCount,
+    roomLines,
+    roomTotal: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(roomTotalValue),
+    addonLines: addons.map((item) => ({
+      id: item.id,
+      label: item.addonLabel,
+      description: item.serviceName,
+      serviceDate: item.serviceDateLabel ?? item.serviceDate ?? '-',
+      status: item.status ?? '-',
+      qty: Number(item.quantity ?? 1),
+      amountLabel: item.totalPrice ?? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(item.totalPriceValue ?? 0)),
+    })),
+    addonTotal: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(addonTotalValue),
+    subtotal: booking.grandTotal,
+    paid: booking.paidAmount ?? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(payments.reduce((total, item) => total + Number(item.signedAmountValue ?? item.amountValue ?? 0), 0)),
+    balance: selectedBookingBalanceLabel.value,
+    paymentStatus: booking.invoiceStatus ?? (Number(booking.balanceValue ?? 0) <= 0 ? 'Paid' : 'Unpaid'),
+    payments: payments.map((item) => ({
+      id: item.id,
+      date: item.paymentDate,
+      method: item.method,
+      type: item.transactionLabel,
+      reference: item.referenceNo || '-',
+      amountLabel: `${Number(item.signedAmountValue ?? item.amountValue ?? 0) < 0 ? '- ' : ''}${new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Math.abs(Number(item.signedAmountValue ?? item.amountValue ?? 0)))}`,
+    })),
+    note: booking.note || '',
+  }
+})
+
 watch(selectedBookingCode, (bookingCode) => {
   hotel.setSelectedBooking(bookingCode || null)
 })
@@ -162,7 +267,9 @@ watch(selectedBooking, (booking) => {
   showInsightModal.value = false
   showAddonModal.value = false
   showAddonListModal.value = false
+  showInvoiceModal.value = false
   showPaymentModal.value = false
+  showStatusConfirmModal.value = false
 })
 
 const filteredBookings = computed(() => {
@@ -264,6 +371,9 @@ const stayCalendarGroups = computed(() => {
       }
 
       const span = Math.max(1, end - start)
+      const nights = Math.max(1, Math.round((toUtcDate(endKey) - toUtcDate(startKey)) / MS_PER_DAY))
+      const stayLabel = `${nights} night(s)`
+      const stayTooltip = `Check-in ${formatShortStayDate(startKey)} | Check-out ${formatShortStayDate(endKey)} | ${stayLabel}`
 
       room.bookings.push({
         id: `${booking.code}-${detail.room}`,
@@ -275,6 +385,8 @@ const stayCalendarGroups = computed(() => {
         source: booking.channel,
         pax: `${detail.adults} adult(s), ${detail.children} child(ren)`,
         balance: booking.note || booking.amount,
+        stayLabel,
+        stayTooltip,
       })
     })
   })
@@ -306,10 +418,10 @@ const staySummary = computed(() => {
   )
 
   return [
-    { label: 'Arrivals', value: String(arrivals), note: 'Reservasi masuk hari ini' },
-    { label: 'In house', value: String(inHouse), note: 'Reservasi aktif di properti' },
-    { label: 'Unassigned', value: String(unassigned), note: 'Booking tanpa assignment kamar' },
-    { label: 'Balance due', value: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(balanceDue), note: 'Nilai reservasi di range ini' },
+    { label: 'Arrivals', value: String(arrivals), note: 'Reservations arriving today' },
+    { label: 'In house', value: String(inHouse), note: 'Active reservations in the property' },
+    { label: 'Unassigned', value: String(unassigned), note: 'Bookings without room assignment' },
+    { label: 'Balance due', value: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(balanceDue), note: 'Reservation value in this range' },
   ]
 })
 
@@ -411,7 +523,14 @@ const replaceBookingRow = (booking) => {
 
 const syncBookingCollections = (rows) => {
   hotel.setBookings([...rows])
-  hotel.setBookingAddons(rows.flatMap((booking) => (Array.isArray(booking.addons) ? booking.addons : [])))
+  hotel.setBookingAddons(
+    rows.flatMap((booking) =>
+      (Array.isArray(booking.addons) ? booking.addons : []).map((addon) => ({
+        ...addon,
+        bookingCode: booking.code,
+      })),
+    ),
+  )
 }
 
 const loadPayments = async () => {
@@ -419,7 +538,7 @@ const loadPayments = async () => {
     const response = await api.get('/payments')
     hotel.setPaymentTransactions(Array.isArray(response.data?.data) ? response.data.data : [])
   } catch (error) {
-    console.error('Gagal memuat pembayaran untuk sinkronisasi booking:', error)
+    console.error('Failed to load payments for booking sync:', error)
     hotel.setPaymentTransactions([])
   }
 }
@@ -445,7 +564,7 @@ const loadBookings = async () => {
   } catch (error) {
     bookingsResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || error?.message || 'Gagal mengambil booking dari database.',
+      text: error?.response?.data?.message || error?.message || 'Failed to load bookings from the database.',
     }
     bookings.value = []
     syncBookingCollections([])
@@ -466,7 +585,7 @@ const loadRooms = async () => {
   } catch (error) {
     bookingsResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || error?.message || 'Gagal mengambil room master untuk kalender.',
+      text: error?.response?.data?.message || error?.message || 'Failed to load room master data for the calendar.',
     }
     roomRows.value = []
   } finally {
@@ -497,13 +616,76 @@ const openEditPage = async (bookingCode) => {
   await router.push({ name: 'booking-edit', params: { bookingCode } })
 }
 
+const openInvoicePreview = async (bookingCode = '') => {
+  const targetCode = bookingCode || selectedBooking.value?.code
+  if (!targetCode) {
+    bookingsResult.value = { tone: 'error', text: 'Select a booking first to view the invoice.' }
+    return
+  }
+
+  if (targetCode !== selectedBookingCode.value) {
+    selectedBookingCode.value = targetCode
+  }
+
+  invoiceDocumentMode.value = 'invoice'
+  showInvoiceModal.value = true
+}
+
+const closeInvoiceModal = () => {
+  showInvoiceModal.value = false
+}
+
+const buildInvoicePreviewPdfUrl = (bookingCode, inline = false) => {
+  const token = localStorage.getItem('pms_token') || ''
+  const baseUrl = String(api.defaults.baseURL || '').replace(/\/+$/, '')
+  const params = new URLSearchParams()
+  params.set('size', 'A5')
+  params.set('document', invoiceDocumentMode.value)
+  if (inline) {
+    params.set('inline', '1')
+  }
+  if (token) {
+    params.set('token', token)
+  }
+  const query = params.toString()
+  return `${baseUrl}/bookings/${bookingCode}/invoice-pdf${query ? `?${query}` : ''}`
+}
+
+const downloadInvoicePreviewPdf = async () => {
+  if (!selectedBooking.value) {
+    return
+  }
+
+  const response = await api.get(`/bookings/${selectedBooking.value.code}/invoice-pdf`, {
+    params: { size: 'A5', document: invoiceDocumentMode.value },
+    responseType: 'blob',
+  })
+  const blob = new Blob([response.data], { type: 'application/pdf' })
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${selectedBooking.value.code}-${invoiceDocumentMode.value}.pdf`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
+
+const openInvoicePreviewPrintPage = () => {
+  if (!selectedBooking.value || typeof window === 'undefined') {
+    return
+  }
+
+  window.open(buildInvoicePreviewPdfUrl(selectedBooking.value.code, true), '_blank', 'noopener')
+}
+
 const openInsightModal = (bookingCode = '') => {
   if (bookingCode) {
     selectBooking(bookingCode)
   }
 
   if (!selectedBooking.value) {
-    bookingsResult.value = { tone: 'error', text: 'Pilih booking terlebih dahulu untuk melihat insight.' }
+    bookingsResult.value = { tone: 'error', text: 'Select a booking first to view booking insight.' }
     return
   }
 
@@ -519,6 +701,65 @@ const canCheckIn = computed(() =>
 )
 
 const canCheckOut = computed(() => selectedBooking.value?.status === 'Checked-in')
+const cancellableStatuses = ['Tentative', 'Confirmed']
+const canCancelBooking = (booking) => cancellableStatuses.includes(booking?.status ?? '')
+const canNoShowBooking = (booking) => cancellableStatuses.includes(booking?.status ?? '')
+
+const currencyFormatter = new Intl.NumberFormat('id-ID', {
+  style: 'currency',
+  currency: 'IDR',
+  maximumFractionDigits: 0,
+})
+
+const formatCurrency = (value) => currencyFormatter.format(Number(value ?? 0))
+
+const estimateCancellationPenalty = (booking) => {
+  const percent = Number(cancellationPolicy.value.percent ?? 0)
+  const base = Number(booking?.grandTotalValue ?? booking?.amountValue ?? 0)
+  if (percent <= 0 || base <= 0) {
+    return 0
+  }
+
+  return Math.round(base * (percent / 100))
+}
+
+const openStatusConfirmModal = (state) => {
+  statusConfirmState.value = {
+    bookingCode: state.bookingCode ?? '',
+    guest: state.guest ?? '',
+    nextStatus: state.nextStatus ?? '',
+    title: state.title ?? '',
+    description: state.description ?? '',
+    penaltyText: state.penaltyText ?? '',
+    warningText: state.warningText ?? '',
+    confirmLabel: state.confirmLabel ?? 'Confirm',
+  }
+  showStatusConfirmModal.value = true
+}
+
+const closeStatusConfirmModal = () => {
+  showStatusConfirmModal.value = false
+  statusConfirmState.value = {
+    bookingCode: '',
+    guest: '',
+    nextStatus: '',
+    title: '',
+    description: '',
+    penaltyText: '',
+    warningText: '',
+    confirmLabel: '',
+  }
+}
+
+const loadCancellationPolicy = async () => {
+  try {
+    const response = await api.get('/settings/policies')
+    cancellationPolicy.value = response.data?.data?.cancellationPolicy ?? { percent: 0, label: '0', enabled: false }
+  } catch (error) {
+    console.error('Failed to load cancellation penalty policy:', error)
+    cancellationPolicy.value = { percent: 0, label: '0', enabled: false }
+  }
+}
 
 const updateBookingStatus = async (bookingCode, status) => {
   bookingsResult.value = { tone: '', text: '' }
@@ -526,7 +767,7 @@ const updateBookingStatus = async (bookingCode, status) => {
   try {
     const response = await api.patch(`/bookings/${bookingCode}/status`, { status })
     const updatedBooking = response.data?.data
-    const message = response.data?.message || 'Status booking berhasil diperbarui.'
+    const message = response.data?.message || 'Booking status was updated successfully.'
 
     if (updatedBooking) {
       replaceBookingRow(updatedBooking)
@@ -542,7 +783,7 @@ const updateBookingStatus = async (bookingCode, status) => {
     }
   } catch (error) {
     const errorData = error?.response?.data
-    const errorMessage = errorData?.errors?.status?.[0] || errorData?.message || error?.message || 'Gagal memperbarui status booking.'
+    const errorMessage = errorData?.errors?.status?.[0] || errorData?.message || error?.message || 'Failed to update booking status.'
     
     bookingsResult.value = {
       tone: 'error',
@@ -551,12 +792,61 @@ const updateBookingStatus = async (bookingCode, status) => {
   }
 }
 
+const submitStatusConfirmation = async () => {
+  const { bookingCode, nextStatus } = statusConfirmState.value
+
+  if (!bookingCode || !nextStatus) {
+    closeStatusConfirmModal()
+    return
+  }
+
+  await updateBookingStatus(bookingCode, nextStatus)
+  closeStatusConfirmModal()
+}
+
 const checkInBooking = async (bookingCode) => {
   await updateBookingStatus(bookingCode, 'Checked-in')
 }
 
 const checkOutBooking = async (bookingCode) => {
   await updateBookingStatus(bookingCode, 'Checked-out')
+}
+
+const cancelBooking = async (booking) => {
+  if (!booking) {
+    return
+  }
+
+  const penaltyValue = estimateCancellationPenalty(booking)
+  openStatusConfirmModal({
+    bookingCode: booking.code,
+    guest: booking.guest,
+    nextStatus: 'Cancelled',
+    title: 'Cancel reservation',
+    description: `Booking ${booking.code} under ${booking.guest} will be canceled.`,
+    penaltyText: cancellationPolicy.value.enabled
+      ? `A cancellation penalty of ${cancellationPolicy.value.label}% will be charged for ${formatCurrency(penaltyValue)}.`
+      : 'There is no active cancellation penalty at the moment.',
+    warningText: 'If payments already received exceed the penalty amount, the system will reject the action until a refund or void is processed.',
+    confirmLabel: 'Yes, cancel booking',
+  })
+}
+
+const noShowBooking = async (booking) => {
+  if (!booking) {
+    return
+  }
+
+  openStatusConfirmModal({
+    bookingCode: booking.code,
+    guest: booking.guest,
+    nextStatus: 'No-Show',
+    title: 'Mark as no-show',
+    description: `Booking ${booking.code} under ${booking.guest} will be marked as no-show.`,
+    penaltyText: '',
+    warningText: 'Use this status only if the guest truly did not arrive and the reservation will not continue.',
+    confirmLabel: 'Yes, mark as no-show',
+  })
 }
 
 const resetAddonEntries = () => {
@@ -603,7 +893,7 @@ const openAddonModal = (bookingCode = '') => {
   }
 
   if (!selectedBooking.value) {
-    addonResult.value = { tone: 'error', text: 'Pilih booking terlebih dahulu untuk menambahkan add-on.' }
+    addonResult.value = { tone: 'error', text: 'Select a booking first before adding an add-on.' }
     return
   }
 
@@ -622,7 +912,7 @@ const openAddonListModal = (bookingCode = '') => {
   }
 
   if (!selectedBooking.value) {
-    addonResult.value = { tone: 'error', text: 'Pilih booking terlebih dahulu untuk melihat add-on.' }
+    addonResult.value = { tone: 'error', text: 'Select a booking first to view add-ons.' }
     return
   }
 
@@ -648,7 +938,7 @@ const submitAddon = async () => {
       const selectedItem = getAddonItemOptions(entry.addonType).find((item) => item.value === entry.itemValue)
 
       if (!selectedItem) {
-        throw new Error('Pilih item layanan add-on terlebih dahulu.')
+        throw new Error('Select an add-on service item first.')
       }
 
       const response = await api.post(`/bookings/${selectedBooking.value.code}/addons`, {
@@ -676,13 +966,13 @@ const submitAddon = async () => {
 
     addonResult.value = {
       tone: 'success',
-      text: `${addonEntries.value.length} add-on berhasil ditambahkan ke booking ${selectedBooking.value.code}.`,
+      text: `${addonEntries.value.length} add-on(s) were added successfully to booking ${selectedBooking.value.code}.`,
     }
     showAddonModal.value = false
   } catch (error) {
     addonResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || error?.message || 'Gagal menambahkan add-on ke booking.',
+      text: error?.response?.data?.message || error?.message || 'Failed to add the add-on to the booking.',
     }
   }
 }
@@ -708,12 +998,12 @@ const cancelAddon = async (addon) => {
 
     addonResult.value = {
       tone: 'success',
-      text: `Add-on ${addon.addonLabel} berhasil dibatalkan.`,
+      text: `Add-on ${addon.addonLabel} was cancelled successfully.`,
     }
   } catch (error) {
     addonResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || error?.message || 'Gagal membatalkan add-on.',
+      text: error?.response?.data?.message || error?.message || 'Failed to cancel the add-on.',
     }
   }
 }
@@ -737,12 +1027,12 @@ const deleteAddon = async (addon) => {
 
     addonResult.value = {
       tone: 'success',
-      text: `Add-on ${addon.addonLabel} berhasil dihapus.`,
+      text: `Add-on ${addon.addonLabel} was removed successfully.`,
     }
   } catch (error) {
     addonResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || error?.message || 'Gagal menghapus add-on.',
+      text: error?.response?.data?.message || error?.message || 'Failed to delete the add-on.',
     }
   }
 }
@@ -758,7 +1048,7 @@ const openPaymentModal = (bookingCode = '') => {
   }
 
   if (!selectedBooking.value) {
-    bookingsResult.value = { tone: 'error', text: 'Pilih booking terlebih dahulu untuk mencatat pembayaran.' }
+    bookingsResult.value = { tone: 'error', text: 'Select a booking first before recording a payment.' }
     return
   }
 
@@ -815,7 +1105,7 @@ const submitPayment = async () => {
     
     paymentResult.value = {
       tone: 'success',
-      text: `Pembayaran tunai/non-tunai ${payment.amount} berhasil diposting. Saldo kini sinkron.`,
+      text: `Payment ${payment.amount} was posted successfully. The balance is now synced.`,
     }
     
     setTimeout(() => {
@@ -827,7 +1117,7 @@ const submitPayment = async () => {
   } catch (error) {
     paymentResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Gagal memposting pembayaran.'),
+      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Failed to post the payment.'),
     }
   }
 }
@@ -841,7 +1131,7 @@ const goCalendarToday = () => {
 }
 
 loadRooms()
-Promise.all([loadBookings(), loadPayments()])
+Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
 </script>
 
 <template>
@@ -861,7 +1151,7 @@ Promise.all([loadBookings(), loadPayments()])
 
   <section class="page-grid">
     <article class="panel-card panel-dense">
-      <LoadingState v-if="loadingBookings" label="Memuat booking dari database..." overlay />
+      <LoadingState v-if="loadingBookings" label="Loading bookings from the database..." overlay />
 
       <div class="panel-head panel-head-tight">
         <div>
@@ -909,49 +1199,50 @@ Promise.all([loadBookings(), loadPayments()])
         {{ addonResult.text }}
       </div>
 
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Code</th>
-            <th>Guest</th>
-            <th>Room</th>
-            <th>Source</th>
-            <th>Room amount</th>
-            <th>Add-on</th>
-            <th>Grand total</th>
-            <th>Status</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="!loadingBookings && !filteredBookings.length">
-            <td colspan="9" class="table-empty-cell">Belum ada reservasi di database.</td>
-          </tr>
-          <tr
-            v-for="item in filteredBookings"
-            :key="item.code"
-            class="booking-table-row"
-            :class="{ selected: selectedBookingCode === item.code }"
-            @click="selectBooking(item.code)"
-          >
-            <td><strong>{{ item.code }}</strong></td>
-            <td>{{ item.guest }}</td>
-            <td>{{ item.room }}</td>
-            <td>{{ item.channel }}</td>
-            <td>{{ item.amount }}</td>
-            <td>{{ item.addonsTotal }}</td>
-            <td><strong>{{ item.grandTotal }}</strong></td>
-            <td>{{ item.status }}</td>
-            <td>
-              <div class="modal-actions">
-                <button class="action-button" @click.stop="openInsightModal(item.code)">Insight</button>
-                <button class="action-button" @click.stop="openEditPage(item.code)">Edit</button>
-                <button class="action-button" @click.stop="openAddonModal(item.code)">Add add-on</button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table v-smart-table class="data-table booking-data-table">
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Guest</th>
+              <th>Room</th>
+              <th>Source</th>
+              <th>Room amount</th>
+              <th>Add-on</th>
+              <th>Grand total</th>
+              <th class="booking-status-col">Status</th>
+              <th class="booking-action-col">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!loadingBookings && !filteredBookings.length">
+              <td colspan="9" class="table-empty-cell">There are no reservations in the database yet.</td>
+            </tr>
+            <tr
+              v-for="item in filteredBookings"
+              :key="item.code"
+              class="booking-table-row"
+              :class="{ selected: selectedBookingCode === item.code }"
+              @click="selectBooking(item.code)"
+            >
+              <td><strong>{{ item.code }}</strong></td>
+              <td>{{ item.guest }}</td>
+              <td>{{ item.room }}</td>
+              <td>{{ item.channel }}</td>
+              <td>{{ item.amount }}</td>
+              <td>{{ item.addonsTotal }}</td>
+              <td><strong>{{ item.grandTotal }}</strong></td>
+              <td class="booking-status-cell">{{ item.status }}</td>
+              <td class="booking-action-cell">
+                <div class="modal-actions booking-table-actions">
+                  <button class="action-button" @click.stop="openInsightModal(item.code)">Insight</button>
+                  <button class="action-button" @click.stop="openEditPage(item.code)">Edit</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </article>
   </section>
 
@@ -990,7 +1281,7 @@ Promise.all([loadBookings(), loadPayments()])
                 v-model="entry.addonType"
                 :options="addonTypeOptions"
                 :multiple="false"
-                placeholder="Pilih tipe add-on"
+                placeholder="Select add-on type"
                 @update:modelValue="handleAddonTypeChange(entry)"
               />
             </label>
@@ -1018,7 +1309,7 @@ Promise.all([loadBookings(), loadPayments()])
                 v-model="entry.itemValue"
                 :options="getAddonItemOptions(entry.addonType)"
                 :multiple="false"
-                placeholder="Pilih layanan dari master add-on"
+                placeholder="Select a service from the add-on master"
               />
               <p class="subtle">{{ getAddonItemCountLabel(entry) }}</p>
             </label>
@@ -1045,7 +1336,7 @@ Promise.all([loadBookings(), loadPayments()])
         </div>
         <div class="note-cell">
           <strong>Preview total</strong>
-          <p class="subtle">{{ addonPreviewTotal ?? 'Pilih item layanan terlebih dahulu' }}</p>
+          <p class="subtle">{{ addonPreviewTotal ?? 'Select a service item first' }}</p>
         </div>
       </div>
 
@@ -1126,12 +1417,231 @@ Promise.all([loadBookings(), loadPayments()])
         >
           Check-out
         </button>
+        <button class="action-button" @click="closeInsightModal(); openInvoicePreview(selectedBooking.code)">Invoice / Print</button>
         <button class="action-button" @click="closeInsightModal(); openEditPage(selectedBooking.code)">Edit booking</button>
         <button class="action-button" @click="closeInsightModal(); openAddonListModal(selectedBooking.code)">View add-ons</button>
-        <button class="action-button primary" @click="closeInsightModal(); openPaymentModal(selectedBooking.code)">Bayar / Settlement</button>
+        <button class="action-button primary" @click="closeInsightModal(); openPaymentModal(selectedBooking.code)">Payment / Settlement</button>
       </div>
     </section>
   </div>
+
+  <div v-if="showInvoiceModal && invoicePreview" class="modal-backdrop" @click.self="closeInvoiceModal()">
+    <section class="modal-card invoice-modal-card">
+      <div class="panel-head panel-head-tight">
+        <div>
+          <p class="eyebrow-dark">Invoice preview</p>
+          <h3>{{ invoicePreview.invoiceNo }} | {{ invoicePreview.guest }}</h3>
+        </div>
+        <button class="action-button" @click="closeInvoiceModal()">Close</button>
+      </div>
+
+      <article class="invoice-print-sheet">
+        <header class="invoice-print-header">
+          <div class="invoice-brand-block">
+            <p class="eyebrow-dark">Guest folio / invoice</p>
+            <h2>{{ hotel.hotelName }}</h2>
+            <p class="subtle">System-generated guest folio for reservation billing and settlement.</p>
+          </div>
+          <div class="invoice-print-meta invoice-doc-meta">
+            <div>
+              <span class="invoice-meta-label">Invoice No.</span>
+              <strong>{{ invoicePreview.invoiceNo }}</strong>
+            </div>
+            <div>
+              <span class="invoice-meta-label">Booking Ref.</span>
+              <strong>{{ invoicePreview.bookingCode }}</strong>
+            </div>
+            <div>
+              <span class="invoice-meta-label">Status</span>
+              <strong>{{ invoicePreview.paymentStatus }}</strong>
+            </div>
+          </div>
+        </header>
+
+        <section class="invoice-doc-grid">
+          <div class="note-cell">
+            <strong>Bill to</strong>
+            <p class="subtle">{{ invoicePreview.guest }}</p>
+            <p class="subtle">{{ invoicePreview.channel }} booking</p>
+          </div>
+          <div class="note-cell">
+            <strong>Stay details</strong>
+            <p class="subtle">{{ invoicePreview.stayLabel }}</p>
+            <p class="subtle">{{ invoicePreview.nightsLabel }} | {{ invoicePreview.roomCount }} room(s)</p>
+          </div>
+          <div class="note-cell">
+            <strong>Document dates</strong>
+            <p class="subtle">{{ invoicePreview.issueDate }} / {{ invoicePreview.dueDate }}</p>
+          </div>
+          <div class="note-cell">
+            <strong>Room</strong>
+            <p class="subtle">{{ invoicePreview.roomCount }} room(s) | {{ invoicePreview.roomLabel }}</p>
+          </div>
+        </section>
+
+        <section class="invoice-section">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">Room charges</p>
+              <h3>Room details</h3>
+            </div>
+            <strong>{{ invoicePreview.roomTotal }}</strong>
+          </div>
+
+          <div class="table-scroll">
+            <table class="data-table invoice-lines-table">
+              <thead>
+                <tr>
+                  <th>Room</th>
+                  <th>Type</th>
+                  <th>Pax</th>
+                  <th>Rate</th>
+                  <th>Nights</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="room in invoicePreview.roomLines" :key="room.id">
+                  <td><strong>{{ room.room }}</strong></td>
+                  <td>{{ room.roomType }}</td>
+                  <td>{{ room.pax }}</td>
+                  <td>{{ room.rateLabel }}</td>
+                  <td>{{ room.nights }}</td>
+                  <td>{{ room.totalLabel }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="invoice-section">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">Add-ons</p>
+              <h3>Additional purchases and services</h3>
+            </div>
+            <strong>{{ invoicePreview.addonTotal }}</strong>
+          </div>
+
+          <div v-if="invoicePreview.addonLines.length" class="table-scroll">
+            <table class="data-table invoice-lines-table">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Service</th>
+                  <th>Date</th>
+                  <th>Status</th>
+                  <th>Qty</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in invoicePreview.addonLines" :key="item.id">
+                  <td><strong>{{ item.label }}</strong></td>
+                  <td>{{ item.description }}</td>
+                  <td>{{ item.serviceDate }}</td>
+                  <td>{{ item.status }}</td>
+                  <td>{{ item.qty }}</td>
+                  <td>{{ item.amountLabel }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="subtle booking-addon-empty">There are no add-ons in this invoice yet.</p>
+        </section>
+
+        <section class="invoice-charge-summary">
+          <div class="invoice-charge-row">
+            <span>Room charges</span>
+            <strong>{{ invoicePreview.roomTotal }}</strong>
+          </div>
+          <div class="invoice-charge-row">
+            <span>Add-on services</span>
+            <strong>{{ invoicePreview.addonTotal }}</strong>
+          </div>
+          <div class="invoice-charge-row">
+            <span>Total invoice</span>
+            <strong>{{ invoicePreview.subtotal }}</strong>
+          </div>
+          <div class="invoice-charge-row">
+            <span>Paid</span>
+            <strong>{{ invoicePreview.paid }}</strong>
+          </div>
+          <div class="invoice-charge-row balance">
+            <span>Outstanding balance</span>
+            <strong>{{ invoicePreview.balance }}</strong>
+          </div>
+        </section>
+
+        <section class="invoice-print-grid invoice-summary-grid">
+          <div class="note-cell">
+            <strong>Prepared by</strong>
+            <p class="subtle">Front Office</p>
+          </div>
+          <div class="note-cell">
+            <strong>Guest acknowledgment</strong>
+            <p class="subtle">Signature upon request</p>
+          </div>
+          <div class="note-cell">
+            <strong>Settlement status</strong>
+            <p class="subtle">{{ invoicePreview.paymentStatus }}</p>
+          </div>
+        </section>
+
+        <section class="invoice-section">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">Payment history</p>
+              <h3>Payment history</h3>
+            </div>
+          </div>
+
+          <div v-if="invoicePreview.payments.length" class="table-scroll">
+            <table class="data-table invoice-lines-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Method</th>
+                  <th>Reference</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="payment in invoicePreview.payments" :key="payment.id">
+                  <td>{{ payment.date }}</td>
+                  <td><strong>{{ payment.type }}</strong></td>
+                  <td>{{ payment.method }}</td>
+                  <td>{{ payment.reference }}</td>
+                  <td>{{ payment.amountLabel }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="subtle booking-addon-empty">There are no posted payments for this invoice yet.</p>
+        </section>
+
+        <p v-if="invoicePreview.note" class="subtle invoice-print-note">
+          Booking note: {{ invoicePreview.note }}
+        </p>
+
+        <footer class="invoice-print-footer">
+          <div class="invoice-signature-box">
+            <span>Prepared by</span>
+          </div>
+          <div class="invoice-signature-box">
+            <span>Guest signature</span>
+          </div>
+        </footer>
+      </article>
+
+          <div class="modal-actions">
+            <button class="action-button" @click="closeInvoiceModal()">Back</button>
+            <button class="action-button" @click="openInvoicePreviewPrintPage">Open PDF Print</button>
+            <button class="action-button primary" @click="downloadInvoicePreviewPdf">Download PDF</button>
+          </div>
+      </section>
+    </div>
 
   <div v-if="showAddonListModal && selectedBooking" class="modal-backdrop" @click.self="closeAddonListModal()">
     <section class="modal-card">
@@ -1185,7 +1695,7 @@ Promise.all([loadBookings(), loadPayments()])
         </div>
       </div>
       <p v-else class="subtle booking-addon-empty">
-        Belum ada add-on yang ditautkan ke booking ini.
+        There are no add-ons attached to this booking yet.
       </p>
 
       <div class="modal-actions">
@@ -1204,10 +1714,10 @@ Promise.all([loadBookings(), loadPayments()])
     <section class="modal-card">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Input pembayaran (Front Office)</p>
+          <p class="eyebrow-dark">Payment entry (Front Office)</p>
           <h3>{{ selectedBooking.code }} | {{ selectedBooking.guest }}</h3>
         </div>
-        <button class="action-button" @click="closePaymentModal()">Tutup</button>
+        <button class="action-button" @click="closePaymentModal()">Close</button>
       </div>
 
       <div class="booking-inline-summary">
@@ -1216,14 +1726,14 @@ Promise.all([loadBookings(), loadPayments()])
           <p class="subtle">{{ selectedBooking.grandTotal }}</p>
         </div>
         <div class="note-cell">
-          <strong>Outstanding (Belum Lunas)</strong>
+          <strong>Outstanding (Unpaid)</strong>
           <p class="subtle" style="font-weight: bold; color: darkred;">{{ selectedBookingBalanceLabel }}</p>
         </div>
       </div>
 
       <div class="booking-form-grid">
         <label class="field-stack">
-          <span>Tanggal pembayaran</span>
+          <span>Payment date</span>
           <input v-model="paymentForm.paymentDate" class="form-control" type="date" />
         </label>
 
@@ -1235,7 +1745,7 @@ Promise.all([loadBookings(), loadPayments()])
         </label>
 
         <label class="field-stack">
-          <span>Nominal (Rp)</span>
+          <span>Amount (IDR)</span>
           <input 
             v-model="displayAmount" 
             class="form-control" 
@@ -1251,11 +1761,11 @@ Promise.all([loadBookings(), loadPayments()])
         </label>
 
         <label class="field-stack field-span-2">
-          <span>Catatan / Keterangan</span>
+          <span>Notes / Description</span>
           <textarea
             v-model="paymentForm.note"
             class="form-control form-textarea"
-            placeholder="Contoh: Pembayaran deposit awal, pelunasan sisa tagihan, dst"
+            placeholder="Example: initial deposit, settlement of remaining balance, etc."
           ></textarea>
         </label>
       </div>
@@ -1265,8 +1775,48 @@ Promise.all([loadBookings(), loadPayments()])
       </div>
 
       <div class="modal-actions">
-        <button class="action-button" @click="closePaymentModal()">Batal</button>
-        <button class="action-button primary" @click="submitPayment">Posting Settlement</button>
+        <button class="action-button" @click="closePaymentModal()">Cancel</button>
+        <button class="action-button primary" @click="submitPayment">Post settlement</button>
+      </div>
+    </section>
+  </div>
+
+  <div v-if="showStatusConfirmModal" class="modal-backdrop" @click.self="closeStatusConfirmModal()">
+    <section class="modal-card">
+      <div class="panel-head panel-head-tight">
+        <div>
+          <p class="eyebrow-dark">Booking confirmation</p>
+          <h3>{{ statusConfirmState.title }}</h3>
+        </div>
+        <button class="action-button" @click="closeStatusConfirmModal()">Close</button>
+      </div>
+
+      <div class="booking-inline-summary">
+        <div class="note-cell">
+          <strong>Booking</strong>
+          <p class="subtle">{{ statusConfirmState.bookingCode }}</p>
+        </div>
+        <div class="note-cell">
+          <strong>Guest</strong>
+          <p class="subtle">{{ statusConfirmState.guest }}</p>
+        </div>
+      </div>
+
+      <p class="subtle" style="margin-bottom: 12px;">{{ statusConfirmState.description }}</p>
+
+      <div v-if="statusConfirmState.penaltyText" class="booking-feedback success">
+        {{ statusConfirmState.penaltyText }}
+      </div>
+
+      <div v-if="statusConfirmState.warningText" class="booking-feedback error">
+        {{ statusConfirmState.warningText }}
+      </div>
+
+      <div class="modal-actions">
+        <button class="action-button" @click="closeStatusConfirmModal()">Back</button>
+        <button class="action-button primary" @click="submitStatusConfirmation">
+          {{ statusConfirmState.confirmLabel }}
+        </button>
       </div>
     </section>
   </div>

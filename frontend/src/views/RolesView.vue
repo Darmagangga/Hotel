@@ -9,17 +9,18 @@ const saving = ref(false)
 
 const availableMenus = [
   { id: 'dashboard', label: 'Dashboard Front Office' },
-  { id: 'bookings', label: 'Reservasi & Booking' },
-  { id: 'rooms', label: 'Status Kamar & Kalender' },
-  { id: 'finance', label: 'Keuangan & Kasir' },
-  { id: 'journals', label: 'Jurnal Akuntansi' },
-  { id: 'coa', label: 'Bagan Akun (COA)' },
-  { id: 'inventory', label: 'Persediaan Barang (Inventory)' },
-  { id: 'transport', label: 'Transportasi & Penjemputan' },
-  { id: 'activities', label: 'Aktivitas & Tour' },
-  { id: 'reports', label: 'Laporan Hotel' },
-  { id: 'users', label: 'Daftar Pendaftaran Staf' },
-  { id: 'roles', label: 'Pengaturan Hak Akses (Role)' },
+  { id: 'bookings', label: 'Reservations & Bookings' },
+  { id: 'rooms', label: 'Room Status & Calendar' },
+  { id: 'finance', label: 'Finance & Cashier' },
+  { id: 'journals', label: 'Accounting Journals' },
+  { id: 'coa', label: 'Chart of Accounts (COA)' },
+  { id: 'inventory', label: 'Inventory Items' },
+  { id: 'transport', label: 'Transport & Pickups' },
+  { id: 'activities', label: 'Activities & Tours' },
+  { id: 'reports', label: 'Hotel Reports' },
+  { id: 'settings', label: 'Settings & Policies' },
+  { id: 'users', label: 'Staff Registration List' },
+  { id: 'roles', label: 'Access Role Settings' },
 ]
 
 const fetchData = async () => {
@@ -28,7 +29,7 @@ const fetchData = async () => {
     const response = await api.get('/roles')
     roles.value = response.data
   } catch (error) {
-    alert('Gagal memuat peran: ' + error.message)
+    alert('Failed to load roles: ' + error.message)
   } finally {
     loading.value = false
   }
@@ -54,9 +55,9 @@ const saveRole = async (role) => {
   saving.value = true
   try {
     await api.put(`/roles/${role.id}/permissions`, { permissions: role.permissions })
-    alert(`Hak akses untuk ${role.name.toUpperCase()} berhasil disimpan!`)
+    alert(`Permissions for ${role.name.toUpperCase()} were saved successfully.`)
   } catch (error) {
-    alert('Gagal menyimpan: ' + error.message)
+    alert('Failed to save: ' + error.message)
   } finally {
     saving.value = false
   }
@@ -71,27 +72,27 @@ onMounted(() => {
   <div class="page-grid" style="grid-template-columns: 1fr;">
     <div class="panel-head">
       <div>
-        <h3>Pengaturan Hak Akses Menu</h3>
-        <p class="panel-note">Sentralisasi otorisasi halaman untuk setiap jenis departemen staf.</p>
+        <h3>Menu Access Settings</h3>
+        <p class="panel-note">Centralized page authorization for each staff department and role.</p>
       </div>
     </div>
 
-    <LoadingState v-if="loading" label="Memuat kebijakan akses..." />
+    <LoadingState v-if="loading" label="Loading access policies..." />
     <div v-else class="page-grid two">
       
       <!-- Role Cards -->
       <article v-for="role in roles" :key="role.id" class="panel-card panel-dense">
         <div class="panel-head panel-head-tight" style="border-bottom: 1px solid var(--line); padding-bottom:12px; margin-bottom: 12px;">
           <div>
-            <p class="eyebrow-dark">Departemen / Role</p>
+            <p class="eyebrow-dark">Department / Role</p>
             <h3 style="font-size: 1.25rem;">{{ role.name.toUpperCase() }}</h3>
           </div>
           <button class="action-button primary" :disabled="saving" @click="saveRole(role)">
-            Simpan Konfigurasi
+            Save Configuration
           </button>
         </div>
         
-        <p class="subtle" style="margin-bottom: 1rem;">Centang halaman dan menu apa saja yang boleh dibuka oleh departemen ini:</p>
+        <p class="subtle" style="margin-bottom: 1rem;">Select which pages and menus this department is allowed to open:</p>
 
         <div class="permissions-grid">
           <label v-for="menu in availableMenus" :key="menu.id" class="permission-checkbox">

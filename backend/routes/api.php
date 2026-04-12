@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\TransportController;
 use App\Http\Controllers\Api\ActivityCatalogController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\AccountingSyncController;
 use App\Http\Controllers\Api\AuditTrailController;
 use App\Http\Controllers\Api\UserController;
@@ -94,6 +95,11 @@ Route::middleware('pms.permission:reports')->group(function () {
 Route::middleware('pms.permission:dashboard')->group(function () {
     Route::get('/dashboard/owner', [DashboardController::class, 'owner']);
     Route::get('/night-audit/status', [NightAuditController::class, 'status']);
+});
+
+Route::middleware('pms.permission:settings')->group(function () {
+    Route::get('/settings/policies', [SettingsController::class, 'policies']);
+    Route::put('/settings/policies', [SettingsController::class, 'updatePolicies']);
 });
 
 Route::middleware('pms.permission:roles')->group(function () {

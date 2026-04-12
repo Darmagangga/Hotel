@@ -7,6 +7,7 @@ use App\Models\InventoryItem;
 use App\Models\InventoryMovement;
 use App\Models\Room;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class InventoryController extends Controller
 {
@@ -18,6 +19,13 @@ class InventoryController extends Controller
     private function trackingType(InventoryItem $item): string
     {
         return strtolower((string) $item->category) === 'linen' ? 'Linen' : 'Consumable';
+    }
+
+    private function movementContext(InventoryMovement $movement): array
+    {
+        $context = json_decode((string) $movement->notes, true);
+
+        return is_array($context) ? $context : [];
     }
 
     private function itemSnapshot(InventoryItem $item): array
@@ -33,6 +41,7 @@ class InventoryController extends Controller
         return [
             'id' => $item->id,
             'name' => $item->item_name,
+            'code' => $item->sku,
             'category' => $item->category,
             'trackingType' => $this->trackingType($item),
             'unit' => $item->unit,
@@ -47,34 +56,104 @@ class InventoryController extends Controller
         ];
     }
 
-    private function purchaseRow(InventoryMovement $movement): array
+    private function purchaseLineRow(InventoryMovement $movement): array
     {
-        $context = json_decode((string) $movement->notes, true);
-        $supplier = $context['supplier'] ?? $movement->reference_type ?? 'Supplier';
-        $paymentAccount = $context['paymentAccount'] ?? '-';
-        $note = $context['note'] ?? (string) $movement->notes;
+        $context = $this->movementContext($movement);
         $item = $movement->item;
         $quantity = (float) $movement->qty_in;
-        $totalCostValue = $quantity * (float) $movement->unit_cost;
+        $unitCostValue = (float) $movement->unit_cost;
+        $grossSubtotalValue = $quantity * $unitCostValue;
+        $discountPercent = max(0, min(100, (float) ($context['discountPercent'] ?? 0)));
+        $discountValue = (float) ($context['discountValue'] ?? round(($grossSubtotalValue * $discountPercent) / 100, 2));
+        $lineTotalValue = max($grossSubtotalValue - $discountValue, 0);
+        $deliveryDate = trim((string) ($context['deliveryDate'] ?? '')) ?: ($movement->movement_date instanceof \DateTimeInterface
+            ? $movement->movement_date->format('Y-m-d')
+            : (string) $movement->movement_date);
 
         return [
-            'id' => $movement->id,
-            'purchaseDate' => $movement->movement_date,
-            'supplier' => $supplier,
+            'movementId' => $movement->id,
             'itemId' => $movement->item_id,
+            'itemCode' => $item?->sku ?? ('ITEM-' . $movement->item_id),
             'itemName' => $item?->item_name ?? 'Unknown item',
+            'deliveryDate' => $deliveryDate,
             'quantity' => (int) $quantity,
             'unit' => $item?->unit ?? 'pcs',
-            'totalCostValue' => $totalCostValue,
-            'totalCost' => $this->formatCurrency($totalCostValue),
-            'paymentAccount' => $paymentAccount,
-            'note' => $note,
+            'unitCostValue' => $unitCostValue,
+            'unitCost' => $this->formatCurrency($unitCostValue),
+            'grossSubtotalValue' => $grossSubtotalValue,
+            'grossSubtotal' => $this->formatCurrency($grossSubtotalValue),
+            'discountPercent' => $discountPercent,
+            'discountValue' => $discountValue,
+            'discountAmount' => $this->formatCurrency($discountValue),
+            'lineTotalValue' => $lineTotalValue,
+            'lineTotal' => $this->formatCurrency($lineTotalValue),
+            'note' => trim((string) ($context['lineNote'] ?? '')),
+            'costCenter' => trim((string) ($context['costCenter'] ?? '')),
+            'project' => trim((string) ($context['project'] ?? '')),
+        ];
+    }
+
+    private function purchaseTransactionRow($group): array
+    {
+        $first = $group->sortBy('id')->first();
+        $context = $this->movementContext($first);
+        $lines = $group
+            ->sortBy('id')
+            ->map(fn (InventoryMovement $movement) => $this->purchaseLineRow($movement))
+            ->values()
+            ->all();
+
+        $totalQuantity = collect($lines)->sum('quantity');
+        $grossTotalValue = collect($lines)->sum('grossSubtotalValue');
+        $totalDiscountValue = collect($lines)->sum('discountValue');
+        $subtotalValue = collect($lines)->sum('lineTotalValue');
+        $extraCostPercent = max(0, (float) ($context['extraCostPercent'] ?? 0));
+        $extraCostValue = (float) ($context['extraCostValue'] ?? round(($subtotalValue * $extraCostPercent) / 100, 2));
+        $grandTotalValue = $subtotalValue + $extraCostValue;
+        $itemSummary = collect($lines)
+            ->map(fn (array $line) => sprintf('%s x%s', $line['itemName'], $line['quantity']))
+            ->implode(', ');
+
+        return [
+            'id' => (string) $first->reference_id,
+            'transactionNo' => (string) $first->reference_id,
+            'purchaseDate' => $first->movement_date instanceof \DateTimeInterface
+                ? $first->movement_date->format('Y-m-d')
+                : (string) $first->movement_date,
+            'deliveryDate' => trim((string) ($context['headerDeliveryDate'] ?? '')) ?: ($first->movement_date instanceof \DateTimeInterface
+                ? $first->movement_date->format('Y-m-d')
+                : (string) $first->movement_date),
+            'supplier' => $context['supplier'] ?? $first->reference_type ?? 'Supplier',
+            'status' => trim((string) ($context['status'] ?? 'Draft')) ?: 'Draft',
+            'currency' => trim((string) ($context['currency'] ?? 'IDR')) ?: 'IDR',
+            'exchangeRate' => (float) ($context['exchangeRate'] ?? 1),
+            'location' => trim((string) ($context['location'] ?? 'Main Store')),
+            'description' => trim((string) ($context['description'] ?? 'Order Pembelian')),
+            'itemSummary' => $itemSummary,
+            'lineCount' => count($lines),
+            'totalQuantity' => (int) $totalQuantity,
+            'grossTotalValue' => $grossTotalValue,
+            'grossTotal' => $this->formatCurrency($grossTotalValue),
+            'totalDiscountValue' => $totalDiscountValue,
+            'totalDiscount' => $this->formatCurrency($totalDiscountValue),
+            'subtotalValue' => $subtotalValue,
+            'subtotal' => $this->formatCurrency($subtotalValue),
+            'extraCostPercent' => $extraCostPercent,
+            'extraCostValue' => $extraCostValue,
+            'extraCost' => $this->formatCurrency($extraCostValue),
+            'grandTotalValue' => $grandTotalValue,
+            'totalCostValue' => $grandTotalValue,
+            'grandTotal' => $this->formatCurrency($grandTotalValue),
+            'totalCost' => $this->formatCurrency($grandTotalValue),
+            'paymentAccount' => $context['paymentAccount'] ?? '-',
+            'note' => $context['note'] ?? '',
+            'lines' => $lines,
         ];
     }
 
     private function issueRow(InventoryMovement $movement): array
     {
-        $context = json_decode((string) $movement->notes, true);
+        $context = $this->movementContext($movement);
         $item = $movement->item;
         $trackingType = $item ? $this->trackingType($item) : 'Consumable';
         $quantity = (float) $movement->qty_out;
@@ -82,7 +161,9 @@ class InventoryController extends Controller
 
         return [
             'id' => $movement->id,
-            'issueDate' => $movement->movement_date,
+            'issueDate' => $movement->movement_date instanceof \DateTimeInterface
+                ? $movement->movement_date->format('Y-m-d')
+                : (string) $movement->movement_date,
             'roomNo' => $movement->reference_id,
             'itemId' => $movement->item_id,
             'itemName' => $item?->item_name ?? 'Unknown item',
@@ -100,28 +181,57 @@ class InventoryController extends Controller
     private function journalRows(array $purchaseRows, array $issueRows): array
     {
         $purchaseEntries = collect($purchaseRows)->flatMap(function (array $entry) {
-            return [
+            $lineEntries = collect($entry['lines'] ?? [])->flatMap(function (array $line) use ($entry) {
+                return [
+                    [
+                        'id' => 'pur-' . $entry['transactionNo'] . '-' . $line['movementId'] . '-dr',
+                        'entryDate' => $entry['purchaseDate'],
+                        'source' => $entry['transactionNo'],
+                        'transactionType' => 'Purchase',
+                        'account' => 'Inventory',
+                        'position' => 'Debit',
+                        'amount' => $line['lineTotal'],
+                        'memo' => 'Pembelian ' . $line['itemName'],
+                    ],
+                    [
+                        'id' => 'pur-' . $entry['transactionNo'] . '-' . $line['movementId'] . '-cr',
+                        'entryDate' => $entry['purchaseDate'],
+                        'source' => $entry['transactionNo'],
+                        'transactionType' => 'Purchase',
+                        'account' => $entry['paymentAccount'],
+                        'position' => 'Credit',
+                        'amount' => $line['lineTotal'],
+                        'memo' => 'Pembayaran pembelian ' . $line['itemName'],
+                    ],
+                ];
+            });
+
+            if (($entry['extraCostValue'] ?? 0) <= 0) {
+                return $lineEntries->all();
+            }
+
+            return $lineEntries->concat([
                 [
-                    'id' => 'pur-' . $entry['id'] . '-dr',
+                    'id' => 'pur-' . $entry['transactionNo'] . '-extra-dr',
                     'entryDate' => $entry['purchaseDate'],
-                    'source' => $entry['id'],
+                    'source' => $entry['transactionNo'],
                     'transactionType' => 'Purchase',
                     'account' => 'Inventory',
                     'position' => 'Debit',
-                    'amount' => $entry['totalCost'],
-                    'memo' => 'Pembelian ' . $entry['itemName'],
+                    'amount' => $entry['extraCost'],
+                    'memo' => 'Biaya lain pembelian ' . $entry['transactionNo'],
                 ],
                 [
-                    'id' => 'pur-' . $entry['id'] . '-cr',
+                    'id' => 'pur-' . $entry['transactionNo'] . '-extra-cr',
                     'entryDate' => $entry['purchaseDate'],
-                    'source' => $entry['id'],
+                    'source' => $entry['transactionNo'],
                     'transactionType' => 'Purchase',
                     'account' => $entry['paymentAccount'],
                     'position' => 'Credit',
-                    'amount' => $entry['totalCost'],
-                    'memo' => 'Pembayaran pembelian ' . $entry['itemName'],
+                    'amount' => $entry['extraCost'],
+                    'memo' => 'Pembayaran biaya lain ' . $entry['transactionNo'],
                 ],
-            ];
+            ])->all();
         });
 
         $issueEntries = collect($issueRows)->flatMap(function (array $entry) {
@@ -179,7 +289,9 @@ class InventoryController extends Controller
             ->where('qty_in', '>', 0)
             ->latest('movement_date')
             ->get()
-            ->map(fn (InventoryMovement $movement) => $this->purchaseRow($movement))
+            ->groupBy('reference_id')
+            ->map(fn ($group) => $this->purchaseTransactionRow($group))
+            ->sortByDesc('purchaseDate')
             ->values()
             ->all();
 
@@ -247,37 +359,115 @@ class InventoryController extends Controller
     {
         $payload = $request->validate([
             'purchaseDate' => ['required', 'date'],
+            'deliveryDate' => ['nullable', 'date'],
             'supplier' => ['required', 'string', 'max:255'],
-            'itemId' => ['required', 'integer', 'exists:inventory_items,id'],
-            'quantity' => ['required', 'integer', 'min:1'],
-            'unitCostValue' => ['required', 'numeric', 'gt:0'],
+            'status' => ['nullable', 'string', 'max:100'],
+            'currency' => ['nullable', 'string', 'max:20'],
+            'exchangeRate' => ['nullable', 'numeric', 'gt:0'],
+            'location' => ['nullable', 'string', 'max:255'],
+            'description' => ['nullable', 'string', 'max:255'],
             'paymentAccount' => ['required', 'string', 'max:255'],
             'note' => ['nullable', 'string'],
+            'extraCostPercent' => ['nullable', 'numeric', 'min:0'],
+            'extraCostValue' => ['nullable', 'numeric', 'min:0'],
+            'itemId' => ['nullable', 'integer', 'exists:inventory_items,id'],
+            'quantity' => ['nullable', 'integer', 'min:1'],
+            'unitCostValue' => ['nullable', 'numeric', 'gt:0'],
+            'items' => ['nullable', 'array', 'min:1'],
+            'items.*.itemId' => ['required_with:items', 'integer', 'exists:inventory_items,id'],
+            'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
+            'items.*.unitCostValue' => ['required_with:items', 'numeric', 'gt:0'],
+            'items.*.deliveryDate' => ['nullable', 'date'],
+            'items.*.discountPercent' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'items.*.note' => ['nullable', 'string'],
+            'items.*.costCenter' => ['nullable', 'string', 'max:255'],
+            'items.*.project' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $item = InventoryItem::findOrFail($payload['itemId']);
-        $movement = InventoryMovement::create([
-            'item_id' => $item->id,
-            'movement_type' => 'purchase',
-            'qty_in' => (int) $payload['quantity'],
-            'qty_out' => 0,
-            'reference_id' => 'PUR-' . now()->format('YmdHis'),
-            'reference_type' => 'purchase',
-            'notes' => json_encode([
-                'supplier' => $payload['supplier'],
-                'paymentAccount' => $payload['paymentAccount'],
-                'note' => $payload['note'] ?? '',
-            ], JSON_THROW_ON_ERROR),
-            'movement_date' => $payload['purchaseDate'],
-            'unit_cost' => (float) $payload['unitCostValue'],
-        ]);
+        $items = collect($payload['items'] ?? []);
+        if ($items->isEmpty() && !empty($payload['itemId'])) {
+            $items = collect([[
+                'itemId' => (int) $payload['itemId'],
+                'quantity' => (int) $payload['quantity'],
+                'unitCostValue' => (float) $payload['unitCostValue'],
+                'deliveryDate' => $payload['deliveryDate'] ?? $payload['purchaseDate'],
+                'discountPercent' => 0,
+                'note' => '',
+                'costCenter' => '',
+                'project' => '',
+            ]]);
+        }
 
-        $item->standard_cost = (float) $payload['unitCostValue'];
-        $item->save();
+        if ($items->isEmpty()) {
+            return response()->json(['message' => 'Minimal satu item harus ditambahkan ke POS pembelian.'], 422);
+        }
+
+        $lineNetSubtotal = $items->sum(function (array $entry) {
+            $gross = ((float) $entry['quantity']) * ((float) $entry['unitCostValue']);
+            $discountPercent = max(0, min(100, (float) ($entry['discountPercent'] ?? 0)));
+            $discountValue = ($gross * $discountPercent) / 100;
+
+            return max($gross - $discountValue, 0);
+        });
+
+        $extraCostPercent = max(0, (float) ($payload['extraCostPercent'] ?? 0));
+        $extraCostValue = isset($payload['extraCostValue'])
+            ? (float) $payload['extraCostValue']
+            : round(($lineNetSubtotal * $extraCostPercent) / 100, 2);
+
+        $referenceId = 'PUR-' . now()->format('YmdHis');
+
+        DB::transaction(function () use ($items, $payload, $referenceId, $extraCostPercent, $extraCostValue) {
+            foreach ($items as $entry) {
+                $item = InventoryItem::findOrFail($entry['itemId']);
+                $gross = ((float) $entry['quantity']) * ((float) $entry['unitCostValue']);
+                $discountPercent = max(0, min(100, (float) ($entry['discountPercent'] ?? 0)));
+                $discountValue = round(($gross * $discountPercent) / 100, 2);
+
+                InventoryMovement::create([
+                    'item_id' => $item->id,
+                    'movement_type' => 'purchase',
+                    'qty_in' => (int) $entry['quantity'],
+                    'qty_out' => 0,
+                    'reference_id' => $referenceId,
+                    'reference_type' => 'purchase',
+                    'notes' => json_encode([
+                        'supplier' => $payload['supplier'],
+                        'paymentAccount' => $payload['paymentAccount'],
+                        'note' => $payload['note'] ?? '',
+                        'status' => $payload['status'] ?? 'Draft',
+                        'currency' => $payload['currency'] ?? 'IDR',
+                        'exchangeRate' => (float) ($payload['exchangeRate'] ?? 1),
+                        'location' => $payload['location'] ?? 'Main Store',
+                        'description' => $payload['description'] ?? 'Order Pembelian',
+                        'headerDeliveryDate' => $payload['deliveryDate'] ?? $payload['purchaseDate'],
+                        'extraCostPercent' => $extraCostPercent,
+                        'extraCostValue' => $extraCostValue,
+                        'deliveryDate' => $entry['deliveryDate'] ?? ($payload['deliveryDate'] ?? $payload['purchaseDate']),
+                        'discountPercent' => $discountPercent,
+                        'discountValue' => $discountValue,
+                        'lineNote' => $entry['note'] ?? '',
+                        'costCenter' => $entry['costCenter'] ?? '',
+                        'project' => $entry['project'] ?? '',
+                    ], JSON_THROW_ON_ERROR),
+                    'movement_date' => $payload['purchaseDate'],
+                    'unit_cost' => (float) $entry['unitCostValue'],
+                ]);
+
+                $item->standard_cost = (float) $entry['unitCostValue'];
+                $item->save();
+            }
+        });
+
+        $movements = InventoryMovement::query()
+            ->with('item')
+            ->where('reference_id', $referenceId)
+            ->orderBy('id')
+            ->get();
 
         return response()->json([
-            'message' => "{$movement->reference_id} berhasil diposting sebagai pembelian inventory.",
-            'data' => $this->purchaseRow($movement->load('item')),
+            'message' => "{$referenceId} berhasil diposting sebagai pembelian inventory.",
+            'data' => $this->purchaseTransactionRow($movements),
         ], 201);
     }
 

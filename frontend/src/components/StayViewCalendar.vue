@@ -200,6 +200,7 @@ const selectSlot = (roomNo, dayKey) => {
                 class="stayview-booking"
                 :class="[booking.status, { selected: selectedCode === booking.code }]"
                 :style="bookingStyle(booking)"
+                :title="booking.stayTooltip || ''"
                 tabindex="0"
                 @click="selectBooking(booking.code)"
                 @keyup.enter="selectBooking(booking.code)"
@@ -209,6 +210,7 @@ const selectSlot = (roomNo, dayKey) => {
                   <span>{{ booking.code }}</span>
                 </div>
                 <p>{{ booking.source }} | {{ booking.pax }}</p>
+                <small class="stayview-booking-stay">{{ booking.stayLabel }}</small>
                 <small>{{ booking.balance }}</small>
               </article>
             </div>

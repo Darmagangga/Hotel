@@ -215,13 +215,13 @@ const submitScooter = async () => {
     const response = editingScooterId.value
       ? await api.put(`/activity-catalog/scooters/${editingScooterId.value}`, scooterForm)
       : await api.post('/activity-catalog/scooters', scooterForm)
-    scooterResult.value = { tone: 'success', text: response.data?.message || 'Data scooter berhasil disimpan.' }
+    scooterResult.value = { tone: 'success', text: response.data?.message || 'Scooter data saved successfully.' }
     await loadCatalog()
     closeScooterModal(false)
   } catch (error) {
     scooterResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Gagal menyimpan data scooter.'),
+      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Failed to save scooter data.'),
     }
   }
 }
@@ -233,13 +233,13 @@ const submitOperator = async () => {
     const response = editingOperatorId.value
       ? await api.put(`/activity-catalog/operators/${editingOperatorId.value}`, operatorForm)
       : await api.post('/activity-catalog/operators', operatorForm)
-    operatorResult.value = { tone: 'success', text: response.data?.message || 'Data operator berhasil disimpan.' }
+    operatorResult.value = { tone: 'success', text: response.data?.message || 'Operator data saved successfully.' }
     await loadCatalog()
     closeOperatorModal(false)
   } catch (error) {
     operatorResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Gagal menyimpan data operator.'),
+      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Failed to save operator data.'),
     }
   }
 }
@@ -251,13 +251,13 @@ const submitIslandTour = async () => {
     const response = editingIslandTourId.value
       ? await api.put(`/activity-catalog/island-tours/${editingIslandTourId.value}`, islandTourForm)
       : await api.post('/activity-catalog/island-tours', islandTourForm)
-    islandTourResult.value = { tone: 'success', text: response.data?.message || 'Data island tour berhasil disimpan.' }
+    islandTourResult.value = { tone: 'success', text: response.data?.message || 'Island tour data saved successfully.' }
     await loadCatalog()
     closeIslandTourModal(false)
   } catch (error) {
     islandTourResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Gagal menyimpan data island tour.'),
+      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Failed to save island tour data.'),
     }
   }
 }
@@ -269,13 +269,13 @@ const submitBoatTicket = async () => {
     const response = editingBoatTicketId.value
       ? await api.put(`/activity-catalog/boat-tickets/${editingBoatTicketId.value}`, boatTicketForm)
       : await api.post('/activity-catalog/boat-tickets', boatTicketForm)
-    boatTicketResult.value = { tone: 'success', text: response.data?.message || 'Data boat ticket berhasil disimpan.' }
+    boatTicketResult.value = { tone: 'success', text: response.data?.message || 'Boat ticket data saved successfully.' }
     await loadCatalog()
     closeBoatTicketModal(false)
   } catch (error) {
     boatTicketResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Gagal menyimpan data boat ticket.'),
+      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Failed to save boat ticket data.'),
     }
   }
 }
@@ -316,23 +316,23 @@ onMounted(async () => {
           <p class="eyebrow-dark">Scooter</p>
           <h3>Rental setup</h3>
         </div>
-        <button class="action-button primary" @click="showScooterModal = true">Tambah scooter</button>
+        <button class="action-button primary" @click="showScooterModal = true">Add scooter</button>
       </div>
 
       <div v-if="scooterResult.text" class="booking-feedback" :class="scooterResult.tone">
         {{ scooterResult.text }}
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
             <th>ID</th>
-            <th>Tanggal awal</th>
-            <th>Tanggal akhir</th>
-            <th>Tipe scooter</th>
+            <th>Start date</th>
+            <th>End date</th>
+            <th>Scooter type</th>
             <th>Vendor</th>
-            <th>Harga</th>
-            <th>Aksi</th>
+            <th>Price</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -355,21 +355,21 @@ onMounted(async () => {
           <p class="eyebrow-dark">Operator</p>
           <h3>Vendor and rate</h3>
         </div>
-        <button class="action-button primary" @click="showOperatorModal = true">Tambah operator</button>
+        <button class="action-button primary" @click="showOperatorModal = true">Add operator</button>
       </div>
 
       <div v-if="operatorResult.text" class="booking-feedback" :class="operatorResult.tone">
         {{ operatorResult.text }}
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
             <th>ID</th>
             <th>Operator</th>
-            <th>Harga</th>
-            <th>Informasi</th>
-            <th>Aksi</th>
+            <th>Price</th>
+            <th>Information</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -392,22 +392,22 @@ onMounted(async () => {
           <p class="eyebrow-dark">Island Tour</p>
           <h3>Destination and driver</h3>
         </div>
-        <button class="action-button primary" @click="showIslandTourModal = true">Tambah island tour</button>
+        <button class="action-button primary" @click="showIslandTourModal = true">Add island tour</button>
       </div>
 
       <div v-if="islandTourResult.text" class="booking-feedback" :class="islandTourResult.tone">
         {{ islandTourResult.text }}
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
             <th>ID</th>
-            <th>Destinasi</th>
+            <th>Destination</th>
             <th>Driver</th>
-            <th>Biaya</th>
-            <th>Catatan</th>
-            <th>Aksi</th>
+            <th>Cost</th>
+            <th>Notes</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -429,21 +429,21 @@ onMounted(async () => {
           <p class="eyebrow-dark">Boat Ticket</p>
           <h3>Company, destination, and price</h3>
         </div>
-        <button class="action-button primary" @click="showBoatTicketModal = true">Tambah boat ticket</button>
+        <button class="action-button primary" @click="showBoatTicketModal = true">Add boat ticket</button>
       </div>
 
       <div v-if="boatTicketResult.text" class="booking-feedback" :class="boatTicketResult.tone">
         {{ boatTicketResult.text }}
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
             <th>ID</th>
             <th>Company</th>
             <th>Destination</th>
-            <th>Harga ticket</th>
-            <th>Aksi</th>
+            <th>Ticket price</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -464,30 +464,30 @@ onMounted(async () => {
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">Scooter</p>
-          <h3>{{ editingScooterId ? `Edit ${editingScooterId}` : 'Tambah scooter' }}</h3>
+          <h3>{{ editingScooterId ? `Edit ${editingScooterId}` : 'Add scooter' }}</h3>
         </div>
         <button class="action-button" @click="closeScooterModal()">Close</button>
       </div>
 
       <div class="booking-form-grid">
         <label class="field-stack">
-          <span>Tanggal awal</span>
+          <span>Start date</span>
           <input v-model="scooterForm.startDate" class="form-control" type="date" />
         </label>
         <label class="field-stack">
-          <span>Tanggal akhir</span>
+          <span>End date</span>
           <input v-model="scooterForm.endDate" class="form-control" type="date" />
         </label>
         <label class="field-stack">
-          <span>Tipe scooter</span>
-          <input v-model="scooterForm.scooterType" class="form-control" placeholder="Vario, NMAX, dll" />
+          <span>Scooter type</span>
+          <input v-model="scooterForm.scooterType" class="form-control" placeholder="Vario, NMAX, etc." />
         </label>
         <label class="field-stack">
           <span>Operator / vendor</span>
-          <input v-model="scooterForm.vendor" class="form-control" placeholder="Nama vendor scooter" />
+          <input v-model="scooterForm.vendor" class="form-control" placeholder="Scooter vendor name" />
         </label>
         <label class="field-stack field-span-2">
-          <span>Harga</span>
+          <span>Price</span>
           <input v-model="scooterForm.priceValue" class="form-control" type="number" min="0" step="1000" />
         </label>
       </div>
@@ -511,7 +511,7 @@ onMounted(async () => {
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">Operator</p>
-          <h3>{{ editingOperatorId ? `Edit ${editingOperatorId}` : 'Tambah operator' }}</h3>
+          <h3>{{ editingOperatorId ? `Edit ${editingOperatorId}` : 'Add operator' }}</h3>
         </div>
         <button class="action-button" @click="closeOperatorModal()">Close</button>
       </div>
@@ -519,15 +519,15 @@ onMounted(async () => {
       <div class="booking-form-grid">
         <label class="field-stack">
           <span>Operator</span>
-          <input v-model="operatorForm.operator" class="form-control" placeholder="Nama operator" />
+          <input v-model="operatorForm.operator" class="form-control" placeholder="Operator name" />
         </label>
         <label class="field-stack">
-          <span>Harga</span>
+          <span>Price</span>
           <input v-model="operatorForm.priceValue" class="form-control" type="number" min="0" step="1000" />
         </label>
         <label class="field-stack field-span-2">
-          <span>Informasi</span>
-          <textarea v-model="operatorForm.note" class="form-control form-textarea" placeholder="Info operator"></textarea>
+          <span>Information</span>
+          <textarea v-model="operatorForm.note" class="form-control form-textarea" placeholder="Operator information"></textarea>
         </label>
       </div>
 
@@ -543,15 +543,15 @@ onMounted(async () => {
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">Island tour</p>
-          <h3>{{ editingIslandTourId ? `Edit ${editingIslandTourId}` : 'Tambah island tour' }}</h3>
+          <h3>{{ editingIslandTourId ? `Edit ${editingIslandTourId}` : 'Add island tour' }}</h3>
         </div>
         <button class="action-button" @click="closeIslandTourModal()">Close</button>
       </div>
 
       <div class="booking-form-grid">
         <label class="field-stack">
-          <span>Destinasi</span>
-          <input v-model="islandTourForm.destination" class="form-control" placeholder="Nama destinasi" />
+          <span>Destination</span>
+          <input v-model="islandTourForm.destination" class="form-control" placeholder="Destination name" />
         </label>
         <label class="field-stack">
           <span>Driver</span>
@@ -559,16 +559,16 @@ onMounted(async () => {
             v-model="islandTourForm.driver"
             :options="transportDriverOptions"
             :multiple="false"
-            placeholder="Pilih driver dari transport"
+            placeholder="Select a driver from transport"
           />
         </label>
         <label class="field-stack">
-          <span>Biaya</span>
+          <span>Cost</span>
           <input v-model="islandTourForm.costValue" class="form-control" type="number" min="0" step="1000" />
         </label>
         <label class="field-stack field-span-2">
-          <span>Catatan</span>
-          <textarea v-model="islandTourForm.note" class="form-control form-textarea" placeholder="Info tour"></textarea>
+          <span>Notes</span>
+          <textarea v-model="islandTourForm.note" class="form-control form-textarea" placeholder="Tour information"></textarea>
         </label>
       </div>
 
@@ -584,7 +584,7 @@ onMounted(async () => {
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">Boat ticket</p>
-          <h3>{{ editingBoatTicketId ? `Edit ${editingBoatTicketId}` : 'Tambah boat ticket' }}</h3>
+          <h3>{{ editingBoatTicketId ? `Edit ${editingBoatTicketId}` : 'Add boat ticket' }}</h3>
         </div>
         <button class="action-button" @click="closeBoatTicketModal()">Close</button>
       </div>
@@ -592,14 +592,14 @@ onMounted(async () => {
       <div class="booking-form-grid">
         <label class="field-stack">
           <span>Company</span>
-          <input v-model="boatTicketForm.company" class="form-control" placeholder="Nama company" />
+          <input v-model="boatTicketForm.company" class="form-control" placeholder="Company name" />
         </label>
         <label class="field-stack">
           <span>Destination</span>
-          <input v-model="boatTicketForm.destination" class="form-control" placeholder="Tujuan ticket" />
+          <input v-model="boatTicketForm.destination" class="form-control" placeholder="Ticket destination" />
         </label>
         <label class="field-stack field-span-2">
-          <span>Harga ticket</span>
+          <span>Ticket price</span>
           <input v-model="boatTicketForm.priceValue" class="form-control" type="number" min="0" step="1000" />
         </label>
       </div>

@@ -1,17 +1,33 @@
 <script setup>
-import { computed, reactive, ref, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, reactive, ref, onMounted, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useHotelStore } from '../stores/hotel'
 import api from '../services/api'
 
 const hotel = useHotelStore()
+const route = useRoute()
+const router = useRouter()
 
 const invoiceSearch = ref('')
 const selectedInvoiceCode = ref(hotel.invoiceList[0]?.bookingCode ?? '')
 const showInvoiceModal = ref(false)
+const invoiceDocumentMode = ref('invoice')
 const showPaymentModal = ref(false)
+const showPaymentActionModal = ref(false)
 const paymentResult = ref({ tone: '', text: '' })
-const paymentMethods = ['Tunai', 'Transfer Bank', 'Kartu Kredit', 'Kartu Debit', 'QRIS']
+const paymentActionResult = ref({ tone: '', text: '' })
+const paymentMethods = ['Cash', 'Bank Transfer', 'Credit Card', 'Debit Card', 'QRIS']
+const paymentActionState = ref({
+  id: null,
+  paymentNumber: '',
+  transactionLabel: '',
+  amount: '',
+  action: '',
+  title: '',
+  confirmLabel: '',
+  warningText: '',
+  note: '',
+})
 
 const paymentForm = reactive({
   paymentDate: new Date().toISOString().slice(0, 10),
@@ -70,13 +86,122 @@ const selectedInvoice = computed(() =>
 const recentPayments = computed(() => hotel.paymentTransactions.slice(0, 8))
 const recentJournals = computed(() => hotel.generalJournalList.slice(0, 8))
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const toUtcDate = (value) => {
+  const [year, month, day] = String(value ?? '').slice(0, 10).split('-').map(Number)
+  return new Date(Date.UTC(year, (month || 1) - 1, day || 1))
+}
+const formatShortDate = (value) => {
+  const date = toUtcDate(value)
+  return `${String(date.getUTCDate()).padStart(2, '0')} ${monthNames[date.getUTCMonth()]} ${date.getUTCFullYear()}`
+}
+const diffNights = (start, end) => Math.max(1, Math.round((toUtcDate(end) - toUtcDate(start)) / MS_PER_DAY))
+
+const invoicePrintView = computed(() => {
+  if (!selectedInvoice.value) {
+    return null
+  }
+
+  const invoice = selectedInvoice.value
+  const nights = diffNights(invoice.checkIn, invoice.checkOut)
+  const roomDetails = Array.isArray(invoice.roomDetails) ? invoice.roomDetails : []
+  const rawAddonLines = Array.isArray(invoice.addons) && invoice.addons.length
+    ? invoice.addons.map((item) => ({
+        id: item.id,
+        label: item.addonLabel,
+        description: item.serviceName,
+        serviceDate: item.serviceDateLabel ?? item.serviceDate ?? '-',
+        status: item.status ?? '-',
+        qty: Number(item.quantity ?? 1),
+        amountValue: Number(item.totalPriceValue ?? 0),
+        amountLabel: item.totalPrice ?? toCurrency(Number(item.totalPriceValue ?? 0)),
+      }))
+    : (invoice.items ?? [])
+        .filter((item) => item.type !== 'room')
+        .map((item) => ({
+          id: item.id,
+          label: item.label,
+          description: item.description,
+          serviceDate: '-',
+          status: item.status ?? '-',
+          qty: 1,
+          amountValue: Number(item.amountValue ?? 0),
+          amountLabel: item.amount ?? toCurrency(Number(item.amountValue ?? 0)),
+        }))
+
+  const addonTotalValue = rawAddonLines.reduce((total, item) => total + item.amountValue, 0)
+  const roomOnlySubtotalValue = Math.max(Number(invoice.subtotalValue ?? 0) - addonTotalValue, 0)
+  const roomCount = roomDetails.length || Math.max(1, Number(invoice.roomCount ?? 1))
+  const perRoomDefault = roomCount > 0 ? Math.round(roomOnlySubtotalValue / roomCount) : roomOnlySubtotalValue
+  const roomLines = roomDetails.length
+    ? roomDetails.map((room, index) => {
+        const roomRate = Number(room.rate ?? room.rateValue ?? 0)
+        const totalValue = roomRate > 0 ? roomRate * nights : perRoomDefault
+        return {
+          id: `${invoice.bookingCode}-room-${room.room}-${index}`,
+          room: room.room,
+          roomType: room.roomType,
+          pax: `${Number(room.adults ?? 0)} adult(s), ${Number(room.children ?? 0)} child(ren)`,
+          rateValue: roomRate > 0 ? roomRate : Math.round(totalValue / nights),
+          rateLabel: toCurrency(roomRate > 0 ? roomRate : Math.round(totalValue / nights)),
+          nights,
+          totalValue,
+          totalLabel: toCurrency(totalValue),
+        }
+      })
+    : [
+        {
+          id: `${invoice.bookingCode}-room-main`,
+          room: invoice.room || '-',
+          roomType: '-',
+          pax: '-',
+          rateValue: Math.round(roomOnlySubtotalValue / nights),
+          rateLabel: toCurrency(Math.round(roomOnlySubtotalValue / nights)),
+          nights,
+          totalValue: roomOnlySubtotalValue,
+          totalLabel: toCurrency(roomOnlySubtotalValue),
+        },
+      ]
+
+  const roomTotalValue = roomLines.reduce((total, item) => total + item.totalValue, 0)
+  const paymentLines = (invoice.payments ?? []).map((payment) => ({
+    id: payment.id,
+    date: payment.paymentDate,
+    method: payment.method,
+    type: payment.transactionLabel,
+    reference: payment.referenceNo || '-',
+    amountValue: Number(payment.signedAmountValue ?? payment.amountValue ?? 0),
+    amountLabel: `${Number(payment.signedAmountValue ?? payment.amountValue ?? 0) < 0 ? '- ' : ''}${toCurrency(Math.abs(Number(payment.signedAmountValue ?? payment.amountValue ?? 0)))}`,
+  }))
+
+  return {
+    ...invoice,
+    stayLabel: `${formatShortDate(invoice.checkIn)} - ${formatShortDate(invoice.checkOut)}`,
+    nightsLabel: `${nights} night(s)`,
+    roomLines,
+    roomTotalValue,
+    roomTotalLabel: toCurrency(roomTotalValue),
+    addonLines: rawAddonLines,
+    addonTotalValue,
+    addonTotalLabel: toCurrency(addonTotalValue),
+    paymentLines,
+  }
+})
+
 const openInvoiceModal = (bookingCode) => {
   selectedInvoiceCode.value = bookingCode
+  invoiceDocumentMode.value = 'invoice'
   showInvoiceModal.value = true
 }
 
 const closeInvoiceModal = () => {
   showInvoiceModal.value = false
+  if (route.query.invoice) {
+    const nextQuery = { ...route.query }
+    delete nextQuery.invoice
+    router.replace({ query: nextQuery })
+  }
 }
 
 const openPaymentModal = (bookingCode) => {
@@ -94,11 +219,99 @@ const closePaymentModal = () => {
   showPaymentModal.value = false
 }
 
+const buildInvoicePdfUrl = (bookingCode, inline = false) => {
+  const token = localStorage.getItem('pms_token') || ''
+  const baseUrl = String(api.defaults.baseURL || '').replace(/\/+$/, '')
+  const params = new URLSearchParams()
+  params.set('size', 'A5')
+  params.set('document', invoiceDocumentMode.value)
+  if (inline) {
+    params.set('inline', '1')
+  }
+  if (token) {
+    params.set('token', token)
+  }
+  const query = params.toString()
+  return `${baseUrl}/finance/invoices/${bookingCode}/pdf${query ? `?${query}` : ''}`
+}
+
+const openPaymentActionModal = (payment, action) => {
+  if (!payment?.id) {
+    return
+  }
+
+  paymentActionResult.value = { tone: '', text: '' }
+  paymentActionState.value = {
+    id: payment.id,
+    paymentNumber: payment.paymentNumber,
+    transactionLabel: payment.transactionLabel ?? 'Payment',
+    amount: payment.amount,
+    action,
+    title: action === 'refund' ? 'Refund payment' : 'Void payment',
+    confirmLabel: action === 'refund' ? 'Posting refund' : 'Posting void',
+    warningText: action === 'refund'
+      ? 'Refund will reverse cash received and reopen the related invoice receivable.'
+      : 'Void will cancel this payment and reverse the settlement journal that has already been posted.',
+    note: '',
+  }
+  showPaymentActionModal.value = true
+}
+
+const closePaymentActionModal = () => {
+  showPaymentActionModal.value = false
+  paymentActionState.value = {
+    id: null,
+    paymentNumber: '',
+    transactionLabel: '',
+    amount: '',
+    action: '',
+    title: '',
+    confirmLabel: '',
+    warningText: '',
+    note: '',
+  }
+}
+
+const submitPaymentAction = async () => {
+  if (!paymentActionState.value.id || !paymentActionState.value.action) {
+    closePaymentActionModal()
+    return
+  }
+
+  paymentActionResult.value = { tone: '', text: '' }
+
+  try {
+    const endpoint = paymentActionState.value.action === 'refund'
+      ? `/payments/${paymentActionState.value.id}/refund`
+      : `/payments/${paymentActionState.value.id}/void`
+
+    const response = await api.post(endpoint, {
+      note: paymentActionState.value.note,
+    })
+
+    await Promise.all([loadBookings(), loadPayments(), loadReports()])
+
+    paymentActionResult.value = {
+      tone: 'success',
+      text: response.data?.message || 'Payment action was posted successfully.',
+    }
+
+    setTimeout(() => {
+      closePaymentActionModal()
+    }, 1000)
+  } catch (error) {
+    paymentActionResult.value = {
+      tone: 'error',
+      text: error?.response?.data?.message || error?.message || 'Failed to process the payment action.',
+    }
+  }
+}
+
 const submitPayment = async () => {
   paymentResult.value = { tone: '', text: '' }
 
   if (!selectedInvoice.value) {
-    paymentResult.value = { tone: 'error', text: 'Invoice belum dipilih.' }
+    paymentResult.value = { tone: 'error', text: 'No invoice has been selected yet.' }
     return
   }
 
@@ -116,13 +329,13 @@ const submitPayment = async () => {
 
     paymentResult.value = {
       tone: 'success',
-      text: `Pembayaran ${payment.amount} berhasil diposting ke ${payment.invoiceNo}.`,
+      text: `Payment ${payment.amount} was posted successfully to ${payment.invoiceNo}.`,
     }
     showPaymentModal.value = false
   } catch (error) {
     paymentResult.value = {
       tone: 'error',
-      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Gagal memposting pembayaran.'),
+      text: error?.response?.data?.message || (error instanceof Error ? error.message : 'Failed to post the payment.'),
     }
   }
 }
@@ -132,7 +345,7 @@ const loadPayments = async () => {
     const response = await api.get('/payments')
     hotel.setPaymentTransactions(Array.isArray(response.data?.data) ? response.data.data : [])
   } catch (e) {
-    console.error('Gagal memuat pembayaran:', e)
+    console.error('Failed to load payments:', e)
   }
 }
 
@@ -142,7 +355,12 @@ const syncBookingCollections = (rows) => {
   const allAddons = []
   rows.forEach((booking) => {
     if (Array.isArray(booking.addons)) {
-      allAddons.push(...booking.addons)
+      allAddons.push(
+        ...booking.addons.map((addon) => ({
+          ...addon,
+          bookingCode: booking.code,
+        })),
+      )
     }
   })
 
@@ -156,7 +374,7 @@ const loadBookings = async () => {
 
     syncBookingCollections(realBookings)
   } catch (e) {
-    console.error('Gagal memuat reservasi dari database:', e)
+    console.error('Failed to load reservations from the database:', e)
   }
 }
 
@@ -191,7 +409,7 @@ const loadReports = async () => {
       netCashFlow: Number(cashFlowData.netCashFlow ?? cashFlowData.net_cash_flow ?? 0),
     }
   } catch (e) {
-    console.error('Gagal memuat laporan accounting:', e)
+    console.error('Failed to load accounting reports:', e)
   }
 }
 
@@ -199,10 +417,48 @@ onMounted(async () => {
   await Promise.all([loadBookings(), loadPayments(), loadReports()])
 })
 
-const printInvoice = () => {
-  if (typeof window !== 'undefined') {
-    window.print()
+watch(
+  () => [route.query.invoice, hotel.invoiceList.length],
+  ([invoiceQuery]) => {
+    const bookingCode = String(invoiceQuery ?? '').trim()
+    if (!bookingCode) {
+      return
+    }
+
+    const exists = hotel.invoiceList.some((item) => item.bookingCode === bookingCode)
+    if (exists) {
+      openInvoiceModal(bookingCode)
+    }
+  },
+  { immediate: true },
+)
+
+const downloadInvoicePdf = async () => {
+  if (!selectedInvoice.value) {
+    return
   }
+
+  const response = await api.get(`/finance/invoices/${selectedInvoice.value.bookingCode}/pdf`, {
+    params: { size: 'A5', document: invoiceDocumentMode.value },
+    responseType: 'blob',
+  })
+  const blob = new Blob([response.data], { type: 'application/pdf' })
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${invoiceDocumentMode.value}-${selectedInvoice.value.invoiceNo || selectedInvoice.value.bookingCode}.pdf`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
+
+const openInvoicePrintPage = () => {
+  if (!selectedInvoice.value || typeof window === 'undefined') {
+    return
+  }
+
+  window.open(buildInvoicePdfUrl(selectedInvoice.value.bookingCode, true), '_blank', 'noopener')
 }
 </script>
 
@@ -211,18 +467,18 @@ const printInvoice = () => {
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Ringkasan keuangan</p>
-          <h3>Ringkasan invoice dan pembayaran</h3>
+          <p class="eyebrow-dark">Finance summary</p>
+          <h3>Invoice and payment summary</h3>
         </div>
-        <span class="status-badge warning">{{ hotel.financeOpenFolios.length }} saldo terbuka</span>
+        <span class="status-badge warning">{{ hotel.financeOpenFolios.length }} open balances</span>
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
-            <th>Jenis posting</th>
+            <th>Posting type</th>
             <th>Volume</th>
-            <th>Nominal</th>
+            <th>Amount</th>
           </tr>
         </thead>
         <tbody>
@@ -238,19 +494,19 @@ const printInvoice = () => {
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Folio terbuka</p>
-          <h3>Antrian saldo outstanding</h3>
+          <p class="eyebrow-dark">Open folios</p>
+          <h3>Outstanding balance queue</h3>
         </div>
-        <span class="status-badge info">Tersambung dari booking</span>
+        <span class="status-badge info">Synced from bookings</span>
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
-            <th>Tamu</th>
-            <th>Saldo</th>
-            <th>Referensi</th>
-            <th>Jatuh tempo</th>
+            <th>Guest</th>
+            <th>Balance</th>
+            <th>Reference</th>
+            <th>Due date</th>
           </tr>
         </thead>
         <tbody>
@@ -269,11 +525,11 @@ const printInvoice = () => {
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Daftar invoice</p>
-          <h3>Invoice tamu</h3>
+          <p class="eyebrow-dark">Invoice list</p>
+          <h3>Guest invoices</h3>
         </div>
         <div class="kpi-inline">
-          <span>{{ filteredInvoices.length }} invoice terlihat</span>
+          <span>{{ filteredInvoices.length }}, visible invoices</span>
           <span>{{ hotel.invoiceList.length }} total invoice</span>
         </div>
       </div>
@@ -281,16 +537,16 @@ const printInvoice = () => {
       <div class="table-toolbar">
         <div class="toolbar-tabs">
           <button class="toolbar-tab active">Invoice</button>
-          <button class="toolbar-tab">Pembayaran</button>
-          <button class="toolbar-tab">Jurnal Umum</button>
+          <button class="toolbar-tab">Payments</button>
+          <button class="toolbar-tab">General Journals</button>
         </div>
         <div class="topbar-actions">
           <input
             v-model="invoiceSearch"
             class="toolbar-search"
-            placeholder="Cari invoice / booking / tamu"
+            placeholder="Search invoice / booking / guest"
           />
-          <RouterLink class="action-button primary" :to="{ name: 'journals' }">Jurnal umum</RouterLink>
+          <RouterLink class="action-button primary" :to="{ name: 'journals' }">General journals</RouterLink>
         </div>
       </div>
 
@@ -298,17 +554,17 @@ const printInvoice = () => {
         {{ paymentResult.text }}
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
             <th>Invoice</th>
-            <th>Tamu</th>
-            <th>Menginap</th>
+            <th>Guest</th>
+            <th>Stay</th>
             <th>Total</th>
-            <th>Dibayar</th>
-            <th>Saldo</th>
+            <th>Paid</th>
+            <th>Balance</th>
             <th>Status</th>
-            <th>Aksi</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -322,8 +578,8 @@ const printInvoice = () => {
             <td>{{ item.paymentStatus }}</td>
             <td>
               <div class="modal-actions">
-                <button class="action-button" @click="openInvoiceModal(item.bookingCode)">Pratinjau</button>
-                <button class="action-button primary" @click="openPaymentModal(item.bookingCode)">Pembayaran</button>
+                <button class="action-button" @click="openInvoiceModal(item.bookingCode)">Preview</button>
+                <button class="action-button primary" @click="openPaymentModal(item.bookingCode)">Payment</button>
               </div>
             </td>
           </tr>
@@ -336,27 +592,36 @@ const printInvoice = () => {
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Pembayaran terbaru</p>
-          <h3>Posting pembayaran</h3>
+          <p class="eyebrow-dark">Recent payments</p>
+          <h3>Payment postings</h3>
         </div>
-        <span class="status-badge success">{{ hotel.paymentTransactions.length }} terposting</span>
+        <span class="status-badge success">{{ hotel.paymentTransactions.length }} posted</span>
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
-            <th>Tanggal</th>
+            <th>Date</th>
             <th>Invoice</th>
-            <th>Metode</th>
-            <th>Nominal</th>
+            <th>Type</th>
+            <th>Method</th>
+            <th>Amount</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="item in recentPayments" :key="item.id">
             <td>{{ item.paymentDate }}</td>
             <td><strong>{{ item.invoiceNo }}</strong></td>
+            <td>{{ item.transactionLabel }}</td>
             <td>{{ item.method }}</td>
-            <td>{{ item.amount }}</td>
+            <td>{{ item.transactionType === 'payment' ? item.amount : `- ${item.amount}` }}</td>
+            <td>
+              <div class="modal-actions">
+                <button v-if="item.canRefund" class="action-button" @click="openPaymentActionModal(item, 'refund')">Refund</button>
+                <button v-if="item.canVoid" class="action-button" @click="openPaymentActionModal(item, 'void')">Void</button>
+              </div>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -365,21 +630,21 @@ const printInvoice = () => {
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Jurnal umum</p>
-          <h3>Jurnal manual terbaru</h3>
+          <p class="eyebrow-dark">General journals</p>
+          <h3>Latest manual journals</h3>
         </div>
-        <span class="status-badge info">{{ hotel.generalJournalList.length }} terposting</span>
+        <span class="status-badge info">{{ hotel.generalJournalList.length }} posted</span>
       </div>
 
-      <table class="data-table">
+      <table v-smart-table class="data-table">
         <thead>
           <tr>
-            <th>Tanggal</th>
-            <th>No jurnal</th>
-            <th>Referensi</th>
-            <th>Keterangan</th>
+            <th>Date</th>
+            <th>Journal no.</th>
+            <th>Reference</th>
+            <th>Description</th>
             <th>Debit</th>
-            <th>Kredit</th>
+            <th>Credit</th>
           </tr>
         </thead>
         <tbody>
@@ -398,31 +663,31 @@ const printInvoice = () => {
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Laporan Akuntansi</p>
-          <h3>Laba Rugi (Profit & Loss)</h3>
+          <p class="eyebrow-dark">Accounting report</p>
+          <h3>Profit & Loss</h3>
         </div>
         <span class="status-badge success">Real-time</span>
       </div>
 
       <div class="compact-list">
         <div class="list-row list-row-tight">
-          <strong>Pendapatan Kamar</strong>
+          <strong>Room Revenue</strong>
           <span>{{ toCurrency(profitLossReq.revenue.room) }}</span>
         </div>
         <div class="list-row list-row-tight">
-          <strong>Pendapatan Layanan (Add-ons)</strong>
+          <strong>Service Revenue (Add-ons)</strong>
           <span>{{ toCurrency(profitLossReq.revenue.addon) }}</span>
         </div>
         <div class="list-row list-row-tight">
-          <strong>Total Pendapatan</strong>
+          <strong>Total Revenue</strong>
           <span style="font-weight: bold;">{{ toCurrency(profitLossReq.revenue.total) }}</span>
         </div>
         <div class="list-row list-row-tight">
-          <strong>Pengeluaran Operasional (Jurnal)</strong>
+          <strong>Operating Expenses (Journals)</strong>
           <span style="color: darkred;">- {{ toCurrency(profitLossReq.expense.total) }}</span>
         </div>
         <div class="list-row list-row-tight" style="border-top: 1px solid var(--border); padding-top: 16px; margin-top: 8px;">
-          <strong style="color: var(--primary);">Laba Bersih (Net Profit)</strong>
+          <strong style="color: var(--primary);">Net Profit</strong>
           <strong style="color: var(--primary); font-size: 1.1rem;">{{ toCurrency(profitLossReq.netProfit) }}</strong>
         </div>
       </div>
@@ -431,8 +696,8 @@ const printInvoice = () => {
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Laporan Kas</p>
-          <h3>Arus Kas (Cash Flow)</h3>
+          <p class="eyebrow-dark">Cash report</p>
+          <h3>Cash Flow</h3>
         </div>
         <span class="status-badge info">Real-time</span>
       </div>
@@ -440,20 +705,20 @@ const printInvoice = () => {
       <div class="compact-list">
         <div class="list-row list-row-tight">
           <div>
-            <strong>Kas Masuk (Inflow)</strong>
-            <p class="subtle">Pembayaran tagihan tamu dsb</p>
+            <strong>Cash Inflow</strong>
+            <p class="subtle">Guest invoice payments and related receipts</p>
           </div>
           <span style="font-weight: bold;">{{ toCurrency(cashFlowReq.inflow.guest_payments) }}</span>
         </div>
         <div class="list-row list-row-tight">
           <div>
-            <strong>Kas Keluar (Outflow)</strong>
-            <p class="subtle">Posting pengeluaran jurnal</p>
+            <strong>Cash Outflow</strong>
+            <p class="subtle">Expense journal postings</p>
           </div>
           <span style="font-weight: bold; color: darkred;">- {{ toCurrency(cashFlowReq.outflow.expenses) }}</span>
         </div>
         <div class="list-row list-row-tight" style="border-top: 1px solid var(--border); padding-top: 16px; margin-top: 8px;">
-          <strong style="color: var(--primary);">Kas Bersih Berjalan</strong>
+          <strong style="color: var(--primary);">Net Running Cash</strong>
           <strong style="color: var(--primary); font-size: 1.1rem;">{{ toCurrency(cashFlowReq.netCashFlow) }}</strong>
         </div>
       </div>
@@ -461,78 +726,248 @@ const printInvoice = () => {
   
   </section>
 
-  <div v-if="showInvoiceModal && selectedInvoice" class="modal-backdrop" @click.self="closeInvoiceModal()">
-    <section class="modal-card">
+  <div v-if="showInvoiceModal && selectedInvoice && invoicePrintView" class="modal-backdrop" @click.self="closeInvoiceModal()">
+    <section class="modal-card invoice-modal-card">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Pratinjau invoice</p>
+          <p class="eyebrow-dark">{{ invoiceDocumentMode === 'folio' ? 'Folio preview' : 'Invoice preview' }}</p>
           <h3>{{ selectedInvoice.invoiceNo }} | {{ selectedInvoice.guest }}</h3>
         </div>
-        <button class="action-button" @click="closeInvoiceModal()">Tutup</button>
+        <button class="action-button" @click="closeInvoiceModal()">Close</button>
       </div>
 
-      <div class="booking-inline-summary">
-        <div class="note-cell">
-          <strong>Booking</strong>
-          <p class="subtle">{{ selectedInvoice.bookingCode }} | {{ selectedInvoice.room }}</p>
-        </div>
-        <div class="note-cell">
-          <strong>Tanggal menginap</strong>
-          <p class="subtle">{{ selectedInvoice.checkIn }} to {{ selectedInvoice.checkOut }}</p>
-        </div>
-        <div class="note-cell">
-          <strong>Status pembayaran</strong>
-          <p class="subtle">{{ selectedInvoice.paymentStatus }}</p>
+      <div class="table-toolbar" style="margin-top: 1rem;">
+        <div class="toolbar-tabs">
+          <button class="toolbar-tab" :class="{ active: invoiceDocumentMode === 'invoice' }" @click="invoiceDocumentMode = 'invoice'">Invoice</button>
+          <button class="toolbar-tab" :class="{ active: invoiceDocumentMode === 'folio' }" @click="invoiceDocumentMode = 'folio'">Folio</button>
         </div>
       </div>
 
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Deskripsi</th>
-            <th>Nominal</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in selectedInvoice.items" :key="item.id">
-            <td><strong>{{ item.label }}</strong></td>
-            <td>{{ item.description }}</td>
-            <td>{{ item.amount }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <article class="invoice-print-sheet">
+        <header class="invoice-print-header">
+          <div class="invoice-brand-block">
+            <p class="eyebrow-dark">{{ invoiceDocumentMode === 'folio' ? 'Guest folio' : 'Guest invoice' }}</p>
+            <h2>{{ hotel.hotelName }}</h2>
+            <p class="subtle">
+              {{ invoiceDocumentMode === 'folio'
+                ? 'Detailed guest folio for billing reconciliation, settlement history, and front office follow-up.'
+                : 'Guest invoice for room charges, add-ons, and final settlement amount.' }}
+            </p>
+          </div>
+          <div class="invoice-print-meta invoice-doc-meta">
+            <div>
+              <span class="invoice-meta-label">Invoice No.</span>
+              <strong>{{ invoicePrintView.invoiceNo }}</strong>
+            </div>
+            <div>
+              <span class="invoice-meta-label">Booking Ref.</span>
+              <strong>{{ invoicePrintView.bookingCode }}</strong>
+            </div>
+            <div>
+              <span class="invoice-meta-label">{{ invoiceDocumentMode === 'folio' ? 'Folio Status' : 'Status' }}</span>
+              <strong>{{ invoicePrintView.paymentStatus }}</strong>
+            </div>
+          </div>
+        </header>
 
-      <div class="booking-inline-summary">
-        <div class="note-cell">
-          <strong>Subtotal</strong>
-          <p class="subtle">{{ selectedInvoice.subtotal }}</p>
-        </div>
-        <div class="note-cell">
-          <strong>Dibayar</strong>
-          <p class="subtle">{{ selectedInvoice.paid }}</p>
-        </div>
-        <div class="note-cell">
-          <strong>Saldo</strong>
-          <p class="subtle">{{ selectedInvoice.balance }}</p>
-        </div>
-      </div>
+        <section class="invoice-doc-grid">
+          <div class="note-cell">
+            <strong>Bill to</strong>
+            <p class="subtle">{{ invoicePrintView.guest }}</p>
+            <p class="subtle">{{ invoicePrintView.channel }} booking</p>
+          </div>
+          <div class="note-cell">
+            <strong>Stay details</strong>
+            <p class="subtle">{{ invoicePrintView.stayLabel }}</p>
+            <p class="subtle">{{ invoicePrintView.nightsLabel }} | {{ invoicePrintView.roomCount }} room(s)</p>
+          </div>
+          <div class="note-cell">
+            <strong>Document dates</strong>
+            <p class="subtle">{{ invoicePrintView.issueDate }} / {{ invoicePrintView.dueDate }}</p>
+          </div>
+          <div class="note-cell">
+            <strong>Room</strong>
+            <p class="subtle">{{ invoicePrintView.roomCount }} room(s) | {{ invoicePrintView.room }}</p>
+          </div>
+        </section>
 
-      <div class="compact-list">
-        <div v-for="payment in selectedInvoice.payments" :key="payment.id" class="list-row list-row-tight">
-          <strong>{{ payment.paymentDate }} | {{ payment.method }}</strong>
-          <p class="subtle">{{ payment.amount }} | {{ payment.referenceNo }}</p>
-        </div>
-        <p v-if="!selectedInvoice.payments.length" class="subtle booking-addon-empty">
-          Belum ada pembayaran yang diposting untuk invoice ini.
+        <section class="invoice-section">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">Room charges</p>
+              <h3>Room details</h3>
+            </div>
+            <strong>{{ invoicePrintView.roomTotalLabel }}</strong>
+          </div>
+
+          <div class="table-scroll">
+            <table class="data-table invoice-lines-table">
+              <thead>
+                <tr>
+                  <th>Room</th>
+                  <th>Type</th>
+                  <th>Pax</th>
+                  <th>Rate</th>
+                  <th>Nights</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="room in invoicePrintView.roomLines" :key="room.id">
+                  <td><strong>{{ room.room }}</strong></td>
+                  <td>{{ room.roomType }}</td>
+                  <td>{{ room.pax }}</td>
+                  <td>{{ room.rateLabel }}</td>
+                  <td>{{ room.nights }}</td>
+                  <td>{{ room.totalLabel }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="invoice-section">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">Add-ons</p>
+              <h3>Purchases and add-on services</h3>
+            </div>
+            <strong>{{ invoicePrintView.addonTotalLabel }}</strong>
+          </div>
+
+          <div v-if="invoicePrintView.addonLines.length" class="table-scroll">
+            <table class="data-table invoice-lines-table">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Service</th>
+                  <th>Date</th>
+                  <th>Status</th>
+                  <th>Qty</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in invoicePrintView.addonLines" :key="item.id">
+                  <td><strong>{{ item.label }}</strong></td>
+                  <td>{{ item.description }}</td>
+                  <td>{{ item.serviceDate }}</td>
+                  <td>{{ item.status }}</td>
+                  <td>{{ item.qty }}</td>
+                  <td>{{ item.amountLabel }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="subtle booking-addon-empty">No add-ons found in this invoice.</p>
+        </section>
+
+        <section class="invoice-charge-summary">
+          <div class="invoice-charge-row">
+            <span>Room charges</span>
+            <strong>{{ invoicePrintView.roomTotalLabel }}</strong>
+          </div>
+          <div class="invoice-charge-row">
+            <span>Add-on services</span>
+            <strong>{{ invoicePrintView.addonTotalLabel }}</strong>
+          </div>
+          <div class="invoice-charge-row">
+            <span>Total invoice</span>
+            <strong>{{ invoicePrintView.subtotal }}</strong>
+          </div>
+          <template v-if="invoiceDocumentMode === 'folio'">
+            <div class="invoice-charge-row">
+              <span>Paid</span>
+              <strong>{{ invoicePrintView.paid }}</strong>
+            </div>
+            <div class="invoice-charge-row balance">
+              <span>Outstanding balance</span>
+              <strong>{{ invoicePrintView.balance }}</strong>
+            </div>
+          </template>
+        </section>
+
+        <section class="invoice-print-grid invoice-summary-grid">
+          <div class="note-cell">
+            <strong>Prepared by</strong>
+            <p class="subtle">Front Office</p>
+          </div>
+          <div class="note-cell">
+            <strong>Guest acknowledgment</strong>
+            <p class="subtle">Signature upon request</p>
+          </div>
+          <div class="note-cell">
+            <strong>{{ invoiceDocumentMode === 'folio' ? 'Settlement status' : 'Invoice status' }}</strong>
+            <p class="subtle">{{ invoicePrintView.paymentStatus }}</p>
+          </div>
+        </section>
+
+        <section v-if="invoiceDocumentMode === 'folio'" class="invoice-section">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">Payment history</p>
+              <h3>Payment history</h3>
+            </div>
+          </div>
+
+          <div v-if="invoicePrintView.paymentLines.length" class="table-scroll">
+            <table class="data-table invoice-lines-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Method</th>
+                  <th>Reference</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="payment in invoicePrintView.paymentLines" :key="payment.id">
+                  <td>{{ payment.date }}</td>
+                  <td><strong>{{ payment.type }}</strong></td>
+                  <td>{{ payment.method }}</td>
+                  <td>{{ payment.reference }}</td>
+                  <td>{{ payment.amountLabel }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="subtle booking-addon-empty">No payments have been posted for this invoice.</p>
+        </section>
+
+        <p v-if="invoiceDocumentMode === 'folio' && invoicePrintView.note" class="subtle invoice-print-note">
+          Booking note: {{ invoicePrintView.note }}
         </p>
+
+        <footer class="invoice-print-footer">
+          <div class="invoice-signature-box">
+            <span>Prepared by</span>
+          </div>
+          <div class="invoice-signature-box">
+            <span>Guest signature</span>
+          </div>
+        </footer>
+      </article>
+
+      <div class="compact-list invoice-payment-actions">
+        <div v-for="payment in selectedInvoice.payments" :key="payment.id" class="list-row list-row-tight">
+          <div>
+            <strong>{{ payment.paymentDate }} | {{ payment.method }} | {{ payment.transactionLabel }}</strong>
+            <p class="subtle">{{ payment.transactionType === 'payment' ? payment.amount : `- ${payment.amount}` }} | {{ payment.referenceNo }}</p>
+          </div>
+          <div class="modal-actions">
+            <button v-if="payment.canRefund" class="action-button" @click="openPaymentActionModal(payment, 'refund')">Refund</button>
+            <button v-if="payment.canVoid" class="action-button" @click="openPaymentActionModal(payment, 'void')">Void</button>
+          </div>
+        </div>
       </div>
 
       <div class="modal-actions">
-        <button class="action-button" @click="printInvoice">Cetak invoice</button>
-        <button class="action-button primary" @click="closeInvoiceModal(); openPaymentModal(selectedInvoice.bookingCode)">
-          Catat pembayaran
-        </button>
+            <button class="action-button" @click="openInvoicePrintPage">Open PDF Print</button>
+          <button class="action-button" @click="downloadInvoicePdf">Download PDF</button>
+          <button class="action-button primary" @click="closeInvoiceModal(); openPaymentModal(selectedInvoice.bookingCode)">
+            Record payment
+          </button>
       </div>
     </section>
   </div>
@@ -541,10 +976,10 @@ const printInvoice = () => {
     <section class="modal-card">
       <div class="panel-head panel-head-tight">
         <div>
-          <p class="eyebrow-dark">Input pembayaran</p>
+          <p class="eyebrow-dark">Payment entry</p>
           <h3>{{ selectedInvoice.invoiceNo }} | {{ selectedInvoice.guest }}</h3>
         </div>
-        <button class="action-button" @click="closePaymentModal()">Tutup</button>
+        <button class="action-button" @click="closePaymentModal()">Close</button>
       </div>
 
       <div class="booking-inline-summary">
@@ -553,7 +988,7 @@ const printInvoice = () => {
           <p class="subtle">{{ selectedInvoice.subtotal }}</p>
         </div>
         <div class="note-cell">
-          <strong>Dibayar</strong>
+          <strong>Paid</strong>
           <p class="subtle">{{ selectedInvoice.paid }}</p>
         </div>
         <div class="note-cell">
@@ -564,19 +999,19 @@ const printInvoice = () => {
 
       <div class="booking-form-grid">
         <label class="field-stack">
-          <span>Tanggal pembayaran</span>
+          <span>Payment date</span>
           <input v-model="paymentForm.paymentDate" class="form-control" type="date" />
         </label>
 
         <label class="field-stack">
-          <span>Metode</span>
+          <span>Method</span>
           <select v-model="paymentForm.method" class="form-control">
             <option v-for="item in paymentMethods" :key="item" :value="item">{{ item }}</option>
           </select>
         </label>
 
         <label class="field-stack">
-          <span>Nominal</span>
+          <span>Amount</span>
           <input 
             v-model="displayAmount" 
             class="form-control" 
@@ -587,12 +1022,12 @@ const printInvoice = () => {
         </label>
 
         <label class="field-stack">
-          <span>No referensi</span>
-          <input v-model="paymentForm.referenceNo" class="form-control" placeholder="Nomor TRX / kuitansi" />
+          <span>Reference no.</span>
+          <input v-model="paymentForm.referenceNo" class="form-control" placeholder="TRX number / receipt" />
         </label>
 
         <label class="field-stack field-span-2">
-          <span>Catatan</span>
+          <span>Notes</span>
           <textarea
             v-model="paymentForm.note"
             class="form-control form-textarea"
@@ -606,8 +1041,57 @@ const printInvoice = () => {
       </div>
 
       <div class="modal-actions">
-        <button class="action-button" @click="closePaymentModal()">Batal</button>
-        <button class="action-button primary" @click="submitPayment">Posting pembayaran</button>
+        <button class="action-button" @click="closePaymentModal()">Cancel</button>
+        <button class="action-button primary" @click="submitPayment">Post payment</button>
+      </div>
+    </section>
+  </div>
+
+  <div v-if="showPaymentActionModal" class="modal-backdrop" @click.self="closePaymentActionModal()">
+    <section class="modal-card">
+      <div class="panel-head panel-head-tight">
+        <div>
+          <p class="eyebrow-dark">Payment action</p>
+          <h3>{{ paymentActionState.title }}</h3>
+        </div>
+        <button class="action-button" @click="closePaymentActionModal()">Close</button>
+      </div>
+
+      <div class="booking-inline-summary">
+        <div class="note-cell">
+          <strong>No payment</strong>
+          <p class="subtle">{{ paymentActionState.paymentNumber }}</p>
+        </div>
+        <div class="note-cell">
+          <strong>Original type</strong>
+          <p class="subtle">{{ paymentActionState.transactionLabel }}</p>
+        </div>
+        <div class="note-cell">
+          <strong>Amount</strong>
+          <p class="subtle">{{ paymentActionState.amount }}</p>
+        </div>
+      </div>
+
+      <div class="booking-feedback error">
+        {{ paymentActionState.warningText }}
+      </div>
+
+      <label class="field-stack" style="margin-top: 12px;">
+        <span>Notes</span>
+        <textarea
+          v-model="paymentActionState.note"
+          class="form-control form-textarea"
+          placeholder="Reason for refund / void"
+        ></textarea>
+      </label>
+
+      <div v-if="paymentActionResult.text" class="booking-feedback" :class="paymentActionResult.tone">
+        {{ paymentActionResult.text }}
+      </div>
+
+      <div class="modal-actions">
+        <button class="action-button" @click="closePaymentActionModal()">Back</button>
+        <button class="action-button primary" @click="submitPaymentAction">{{ paymentActionState.confirmLabel }}</button>
       </div>
     </section>
   </div>
