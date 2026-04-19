@@ -628,17 +628,9 @@ class BookingController extends Controller
     {
         $roomRevenue = (float) $booking->room_amount;
         $receivableTotal = (float) $invoice->grand_total;
-        $addonRevenueByType = $booking->bookingAddons()
+        $activeAddons = $booking->bookingAddons()
             ->where('status', '!=', 'cancelled')
-            ->selectRaw('addon_type, SUM(total_price) as total_price')
-            ->groupBy('addon_type')
-            ->get()
-            ->map(function ($row) {
-                return [
-                    'addon_type' => (string) $row->addon_type,
-                    'total_price' => (float) $row->total_price,
-                ];
-            });
+            ->get();
 
         $journal = Journal::query()->firstOrNew([
             'source' => 'invoice',
@@ -673,18 +665,82 @@ class BookingController extends Controller
             ]);
         }
 
-        foreach ($addonRevenueByType as $addonRevenue) {
-            if ($addonRevenue['total_price'] <= 0) {
-                continue;
+        foreach ($activeAddons as $addon) {
+            foreach ($this->addonInvoiceCreditLines($addon, $booking->booking_code) as $line) {
+                $journal->lines()->create([
+                    'coa_code' => $line['coa_code'],
+                    'line_description' => $line['line_description'],
+                    'debit' => 0,
+                    'credit' => $line['credit'],
+                ]);
             }
-
-            $journal->lines()->create([
-                'coa_code' => $this->resolveAddonRevenueCoaCode($addonRevenue['addon_type']),
-                'line_description' => "Add-on revenue {$booking->booking_code} ({$addonRevenue['addon_type']})",
-                'debit' => 0,
-                'credit' => $addonRevenue['total_price'],
-            ]);
         }
+    }
+
+    private function addonInvoiceCreditLines(BookingAddon $addon, string $bookingCode): array
+    {
+        $meta = json_decode((string) $addon->notes, true);
+        $meta = is_array($meta) ? $meta : [];
+        $grossAmount = round((float) $addon->total_price, 2);
+        if ($grossAmount <= 0) {
+            return [];
+        }
+
+        $qty = max(1, (int) $addon->qty);
+        $vendorAmount = round((float) ($meta['vendorTotalPriceValue'] ?? 0), 2);
+        if ($vendorAmount <= 0) {
+            $vendorAmount = round((float) ($meta['vendorUnitPriceValue'] ?? 0) * $qty, 2);
+        }
+        $vendorAmount = max(0, min($grossAmount, $vendorAmount));
+        $feeAmount = round(max(0, $grossAmount - $vendorAmount), 2);
+        $service = $this->fetchAddonServiceSnapshot((string) $addon->addon_type, (int) ($addon->reference_id ?? 0));
+        $feeCoa = !empty($service['fee_coa_code'])
+            ? (string) $service['fee_coa_code']
+            : $this->resolveAddonRevenueCoaCode((string) $addon->addon_type);
+        $payableCoa = (string) ($service['payable_coa_code'] ?? '');
+
+        $lines = [];
+        if ($payableCoa !== '' && $vendorAmount > 0) {
+            $lines[] = [
+                'coa_code' => $payableCoa,
+                'credit' => $vendorAmount,
+                'line_description' => "Vendor payable {$bookingCode} ({$addon->addon_type})",
+            ];
+        }
+        if ($feeAmount > 0 || $vendorAmount <= 0) {
+            $lines[] = [
+                'coa_code' => $feeCoa,
+                'credit' => $feeAmount > 0 ? $feeAmount : $grossAmount,
+                'line_description' => ($payableCoa !== '' && $vendorAmount > 0)
+                    ? "Add-on fee {$bookingCode} ({$addon->addon_type})"
+                    : "Add-on revenue {$bookingCode} ({$addon->addon_type})",
+            ];
+        }
+
+        return $lines;
+    }
+
+    private function fetchAddonServiceSnapshot(string $addonType, int $referenceId): ?array
+    {
+        if ($referenceId <= 0) {
+            return null;
+        }
+
+        $table = match ($addonType) {
+            'transport' => 'transport_rates',
+            'scooter' => 'scooter_catalog',
+            'island_tour' => 'island_tour_catalog',
+            'boat_ticket' => 'boat_ticket_catalog',
+            default => null,
+        };
+
+        if (!$table) {
+            return null;
+        }
+
+        $service = DB::table($table)->where('id', $referenceId)->first();
+
+        return $service ? (array) $service : null;
     }
 
     private function generateJournalNumber(string $journalDate): string

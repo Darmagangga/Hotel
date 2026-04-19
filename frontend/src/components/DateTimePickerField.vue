@@ -21,6 +21,10 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  enableTime: {
+    type: Boolean,
+    default: true,
+  },
 })
 
 const emit = defineEmits(['update:modelValue'])
@@ -29,11 +33,11 @@ const inputRef = ref(null)
 let picker = null
 
 const buildConfig = () => ({
-  enableTime: true,
-  dateFormat: 'Y-m-d H:i',
+  enableTime: props.enableTime,
+  dateFormat: props.enableTime ? 'Y-m-d H:i' : 'Y-m-d',
   altInput: true,
   altInputClass: 'form-control',
-  altFormat: 'd M Y H:i',
+  altFormat: props.enableTime ? 'd M Y H:i' : 'd M Y',
   time_24hr: true,
   locale: English,
   minDate: props.minDate || null,
@@ -60,7 +64,7 @@ watch(
   () => props.modelValue,
   (value) => {
     if (picker && value !== picker.input.value) {
-      picker.setDate(value || null, false, 'Y-m-d H:i')
+      picker.setDate(value || null, false, props.enableTime ? 'Y-m-d H:i' : 'Y-m-d')
     }
   },
 )

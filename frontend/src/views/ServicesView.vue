@@ -65,21 +65,21 @@ const addonCatalogCards = computed(() => [
   },
   {
     name: 'Scooter rental',
-    price: activityCatalog.value.scooters[0]?.price ?? '-',
+    price: activityCatalog.value.scooters[0]?.customerPrice ?? '-',
     schedule: `${activityCatalog.value.scooters.length} scooter setup`,
-    note: 'Linked to the active scooter catalog in the database.',
+    note: `Fee ${activityCatalog.value.scooters[0]?.fee ?? '-'}`,
   },
   {
     name: 'Island tour',
-    price: activityCatalog.value.islandTours[0]?.cost ?? '-',
+    price: activityCatalog.value.islandTours[0]?.customerPrice ?? '-',
     schedule: `${activityCatalog.value.islandTours.length} tour product`,
-    note: 'Linked to the active island tour catalog in the database.',
+    note: `Fee ${activityCatalog.value.islandTours[0]?.fee ?? '-'}`,
   },
   {
     name: 'Boat ticket',
-    price: activityCatalog.value.boatTickets[0]?.price ?? '-',
+    price: activityCatalog.value.boatTickets[0]?.customerPrice ?? '-',
     schedule: `${activityCatalog.value.boatTickets.length} boat route`,
-    note: 'Linked to the active boat ticket catalog in the database.',
+    note: `Fee ${activityCatalog.value.boatTickets[0]?.fee ?? '-'}`,
   },
 ])
 

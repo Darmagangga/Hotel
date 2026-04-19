@@ -12,11 +12,13 @@ const inventoryResult = ref({ tone: '', text: '' })
 const loading = ref(false)
 const showItemModal = ref(false)
 const showIssueModal = ref(false)
+const editingItemId = ref(null)
 const inventoryItems = ref([])
 const inventoryPurchases = ref([])
 const inventoryIssues = ref([])
 const inventoryJournalEntries = ref([])
 const roomRows = ref([])
+const unitMasterRows = ref([])
 
 const itemForm = reactive({
   name: '',
@@ -55,6 +57,13 @@ const inventoryItemOptions = computed(() =>
   })),
 )
 
+const unitMasterOptions = computed(() =>
+  unitMasterRows.value.map((item) => ({
+    value: item.name,
+    label: item.name,
+  })),
+)
+
 const roomOptions = computed(() => {
   if (roomRows.value.length) {
     return roomRows.value.map((room) => ({
@@ -83,12 +92,15 @@ const purchaseTransactionCount = computed(() => inventoryPurchases.value.length)
 const resetItemForm = () => {
   itemForm.name = ''
   itemForm.category = 'Amenity'
-  itemForm.unit = 'pcs'
+  itemForm.unit = unitMasterOptions.value[0]?.value ?? 'pcs'
   itemForm.trackingType = 'Consumable'
   itemForm.inventoryCoa = inventoryAssetOptions.value[0]?.value ?? ''
   itemForm.expenseCoa = inventoryExpenseOptions.value[0]?.value ?? ''
   itemForm.reorderLevel = 0
 }
+
+const itemModalTitle = computed(() => (editingItemId.value ? 'Edit item master' : 'Add item master'))
+const itemSubmitLabel = computed(() => (editingItemId.value ? 'Update item' : 'Save item'))
 
 const resetIssueForm = () => {
   issueForm.issueDate = new Date().toISOString().slice(0, 10)
@@ -100,7 +112,21 @@ const resetIssueForm = () => {
 
 const openItemModal = () => {
   inventoryResult.value = { tone: '', text: '' }
+  editingItemId.value = null
   resetItemForm()
+  showItemModal.value = true
+}
+
+const openEditItemModal = (item) => {
+  inventoryResult.value = { tone: '', text: '' }
+  editingItemId.value = item.id
+  itemForm.name = item.name ?? ''
+  itemForm.category = item.category ?? 'Amenity'
+  itemForm.unit = item.unit ?? 'pcs'
+  itemForm.trackingType = item.trackingType ?? (String(item.category ?? '').toLowerCase() === 'linen' ? 'Linen' : 'Consumable')
+  itemForm.inventoryCoa = item.inventoryCoa ?? inventoryAssetOptions.value[0]?.value ?? ''
+  itemForm.expenseCoa = item.expenseCoa ?? inventoryExpenseOptions.value[0]?.value ?? ''
+  itemForm.reorderLevel = Number(item.reorderLevel ?? 0)
   showItemModal.value = true
 }
 
@@ -112,9 +138,10 @@ const openIssueModal = () => {
 
 const loadDependencies = async () => {
   try {
-    const [coaResponse, roomResponse] = await Promise.all([
+    const [coaResponse, roomResponse, unitResponse] = await Promise.all([
       api.get('/coa-accounts', { params: { per_page: 500 } }),
       api.get('/rooms', { params: { per_page: 200 } }),
+      api.get('/master-units'),
     ])
 
     const coaRows = Array.isArray(coaResponse.data?.data) ? coaResponse.data.data : []
@@ -123,8 +150,10 @@ const loadDependencies = async () => {
     }
 
     roomRows.value = Array.isArray(roomResponse.data?.data) ? roomResponse.data.data : []
+    unitMasterRows.value = Array.isArray(unitResponse.data?.data) ? unitResponse.data.data : []
   } catch (error) {
     roomRows.value = []
+    unitMasterRows.value = []
   }
 }
 
@@ -164,11 +193,17 @@ const submitItem = async () => {
   inventoryResult.value = { tone: '', text: '' }
 
   try {
-    const response = await api.post('/inventory/items', { ...itemForm })
+    const isEditing = Boolean(editingItemId.value)
+    const response = isEditing
+      ? await api.put(`/inventory/items/${editingItemId.value}`, { ...itemForm })
+      : await api.post('/inventory/items', { ...itemForm })
     inventoryResult.value = {
       tone: 'success',
-      text: response.data?.message || `Item ${itemForm.name} was added to the inventory master successfully.`,
+      text: response.data?.message || (isEditing
+        ? `Item ${itemForm.name} was updated successfully.`
+        : `Item ${itemForm.name} was added to the inventory master successfully.`),
     }
+    editingItemId.value = null
     showItemModal.value = false
     await loadInventory()
   } catch (error) {
@@ -238,6 +273,7 @@ onMounted(async () => {
               <th>Last cost</th>
               <th>Inventory COA</th>
               <th>Expense COA</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -251,6 +287,9 @@ onMounted(async () => {
               <td>{{ item.latestCost }}</td>
               <td>{{ item.inventoryCoa }}</td>
               <td>{{ item.expenseCoa }}</td>
+              <td>
+                <button class="action-button" @click="openEditItemModal(item)">Edit</button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -378,9 +417,9 @@ onMounted(async () => {
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">Inventory item</p>
-          <h3>Add item master</h3>
+          <h3>{{ itemModalTitle }}</h3>
         </div>
-        <button class="action-button" @click="showItemModal = false">Close</button>
+        <button class="action-button" @click="showItemModal = false; editingItemId = null">Close</button>
       </div>
 
       <div class="booking-form-grid">
@@ -400,7 +439,12 @@ onMounted(async () => {
 
         <label class="field-stack">
           <span>Unit</span>
-          <input v-model="itemForm.unit" class="form-control" placeholder="pcs" />
+          <Select2Field
+            v-model="itemForm.unit"
+            :options="unitMasterOptions"
+            :multiple="false"
+            placeholder="Select unit"
+          />
         </label>
 
         <label class="field-stack">
@@ -438,8 +482,8 @@ onMounted(async () => {
       </div>
 
       <div class="modal-actions">
-        <button class="action-button" @click="showItemModal = false">Cancel</button>
-        <button class="action-button primary" @click="submitItem">Save item</button>
+        <button class="action-button" @click="showItemModal = false; editingItemId = null">Cancel</button>
+        <button class="action-button primary" @click="submitItem">{{ itemSubmitLabel }}</button>
       </div>
     </section>
   </div>

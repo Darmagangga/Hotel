@@ -1,13 +1,14 @@
 import axios from 'axios'
 
 const resolveApiBaseUrl = () => {
-  if (typeof window === 'undefined') {
-    return 'http://localhost/HOTEL-BOOK/api-hotel.php/'
-  }
-
   const explicitBase = import.meta.env.VITE_API_BASE_URL
+
   if (explicitBase) {
     return explicitBase.endsWith('/') ? explicitBase : `${explicitBase}/`
+  }
+
+  if (typeof window === 'undefined') {
+    return 'http://localhost/HOTEL-BOOK/api-hotel.php/'
   }
 
   const { origin, hostname, port, pathname } = window.location

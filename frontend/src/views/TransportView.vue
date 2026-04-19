@@ -1,9 +1,17 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import Select2Field from '../components/Select2Field.vue'
 import api from '../services/api'
 import { useHotelStore } from '../stores/hotel'
 
 const hotel = useHotelStore()
+
+const formatCurrency = (amount) =>
+  new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    maximumFractionDigits: 0,
+  }).format(Number(amount || 0))
 
 const transportSearch = ref('')
 const transportResult = ref({ tone: '', text: '' })
@@ -11,20 +19,55 @@ const editingTransportId = ref('')
 const showTransportModal = ref(false)
 const transportRates = ref([])
 const transportManifest = ref([])
+const activityVendors = ref([])
+const coaAccounts = ref([])
 
 const transportForm = reactive({
   driver: '',
-  pickupPriceValue: 250000,
-  dropOffPriceValue: 250000,
+  vendorPickupPriceValue: 200000,
+  vendorDropOffPriceValue: 200000,
+  customerPickupPriceValue: 250000,
+  customerDropOffPriceValue: 250000,
   vehicle: '',
+  vendorId: '',
+  feeCoaCode: '',
+  payableCoaCode: '',
   note: '',
 })
+
+const transportVendorOptions = computed(() => {
+  const rows = activityVendors.value.filter((item) => item.isActive)
+  return rows.map((item) => ({
+    value: String(item.id),
+    label: `${item.vendorName}${item.contactPerson ? ` | ${item.contactPerson}` : ''}`,
+  }))
+})
+
+const payableCoaOptions = computed(() =>
+  coaAccounts.value
+    .filter((item) => String(item.category).toLowerCase() === 'liability' && item.active !== false)
+    .map((item) => ({ value: item.code, label: `${item.code} - ${item.name}` })),
+)
+const revenueCoaOptions = computed(() =>
+  coaAccounts.value
+    .filter((item) => String(item.category).toLowerCase() === 'revenue' && item.active !== false)
+    .map((item) => ({ value: item.code, label: `${item.code} - ${item.name}` })),
+)
 
 const filteredTransportRates = computed(() => {
   const query = transportSearch.value.trim().toLowerCase()
 
   return transportRates.value.filter((item) => {
-    const haystack = [item.id, item.driver, item.vehicle, item.pickupPrice, item.dropOffPrice, item.note]
+    const haystack = [
+      item.id,
+      item.driver,
+      item.vehicle,
+      item.vendorPickupPrice,
+      item.vendorDropOffPrice,
+      item.customerPickupPrice,
+      item.customerDropOffPrice,
+      item.note,
+    ]
       .join(' ')
       .toLowerCase()
 
@@ -35,21 +78,24 @@ const filteredTransportRates = computed(() => {
 const transportSummary = computed(() => ({
   drivers: transportRates.value.length,
   avgPickup: transportRates.value.length
-    ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 })
-      .format(transportRates.value.reduce((total, item) => total + item.pickupPriceValue, 0) / transportRates.value.length)
+    ? formatCurrency(transportRates.value.reduce((total, item) => total + Number(item.customerPickupPriceValue || 0), 0) / transportRates.value.length)
     : '-',
   avgDropOff: transportRates.value.length
-    ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 })
-      .format(transportRates.value.reduce((total, item) => total + item.dropOffPriceValue, 0) / transportRates.value.length)
+    ? formatCurrency(transportRates.value.reduce((total, item) => total + Number(item.customerDropOffPriceValue || 0), 0) / transportRates.value.length)
     : '-',
 }))
 
 const resetTransportForm = (clearResult = true) => {
   editingTransportId.value = ''
   transportForm.driver = ''
-  transportForm.pickupPriceValue = 250000
-  transportForm.dropOffPriceValue = 250000
+  transportForm.vendorPickupPriceValue = 200000
+  transportForm.vendorDropOffPriceValue = 200000
+  transportForm.customerPickupPriceValue = 250000
+  transportForm.customerDropOffPriceValue = 250000
   transportForm.vehicle = ''
+  transportForm.vendorId = ''
+  transportForm.feeCoaCode = ''
+  transportForm.payableCoaCode = ''
   transportForm.note = ''
 
   if (clearResult) {
@@ -70,9 +116,14 @@ const openCreateTransportModal = () => {
 const editTransport = (transport) => {
   editingTransportId.value = String(transport.dbId)
   transportForm.driver = transport.driver
-  transportForm.pickupPriceValue = transport.pickupPriceValue
-  transportForm.dropOffPriceValue = transport.dropOffPriceValue
+  transportForm.vendorPickupPriceValue = Number(transport.vendorPickupPriceValue ?? transport.pickupPriceValue ?? 0)
+  transportForm.vendorDropOffPriceValue = Number(transport.vendorDropOffPriceValue ?? transport.dropOffPriceValue ?? 0)
+  transportForm.customerPickupPriceValue = Number(transport.customerPickupPriceValue ?? transport.pickupPriceValue ?? 0)
+  transportForm.customerDropOffPriceValue = Number(transport.customerDropOffPriceValue ?? transport.dropOffPriceValue ?? 0)
   transportForm.vehicle = transport.vehicle
+  transportForm.vendorId = transport.vendorId ? String(transport.vendorId) : ''
+  transportForm.feeCoaCode = transport.feeCoaCode || transport.expenseCoaCode || ''
+  transportForm.payableCoaCode = transport.payableCoaCode || ''
   transportForm.note = transport.note
   transportResult.value = { tone: '', text: '' }
   showTransportModal.value = true
@@ -80,11 +131,15 @@ const editTransport = (transport) => {
 
 const loadTransportRates = async () => {
   try {
-    const [response, bookingResponse] = await Promise.all([
+    const [response, bookingResponse, vendorResponse, coaResponse] = await Promise.all([
       api.get('/transport-rates'),
       api.get('/bookings', { params: { per_page: 500 } }),
+      api.get('/vendors'),
+      api.get('/coa-accounts', { params: { per_page: 500 } }),
     ])
     transportRates.value = Array.isArray(response.data?.data) ? response.data.data : []
+    activityVendors.value = Array.isArray(vendorResponse.data?.data) ? vendorResponse.data.data : []
+    coaAccounts.value = Array.isArray(coaResponse.data?.data) ? coaResponse.data.data : []
     hotel.setTransportRates(transportRates.value)
     const bookingRows = Array.isArray(bookingResponse.data?.data) ? bookingResponse.data.data : []
     transportManifest.value = bookingRows
@@ -117,9 +172,14 @@ const submitTransport = async () => {
   try {
     const payload = {
       driver: transportForm.driver,
-      pickupPriceValue: Number(transportForm.pickupPriceValue),
-      dropOffPriceValue: Number(transportForm.dropOffPriceValue),
+      vendorPickupPriceValue: Number(transportForm.vendorPickupPriceValue),
+      vendorDropOffPriceValue: Number(transportForm.vendorDropOffPriceValue),
+      customerPickupPriceValue: Number(transportForm.customerPickupPriceValue),
+      customerDropOffPriceValue: Number(transportForm.customerDropOffPriceValue),
       vehicle: transportForm.vehicle,
+      vendorId: transportForm.vendorId ? Number(transportForm.vendorId) : 0,
+      feeCoaCode: transportForm.feeCoaCode,
+      payableCoaCode: transportForm.payableCoaCode,
       note: transportForm.note,
     }
     const response = editingTransportId.value
@@ -181,8 +241,10 @@ onMounted(async () => {
           <th>ID</th>
           <th>Driver</th>
           <th>Vehicle</th>
-          <th>Pickup</th>
-          <th>Drop off</th>
+          <th>Harga Vendor</th>
+          <th>Harga Customer</th>
+          <th>Fee COA</th>
+          <th>Hutang COA</th>
           <th>Notes</th>
           <th>Action</th>
         </tr>
@@ -192,8 +254,16 @@ onMounted(async () => {
           <td><strong>{{ item.id }}</strong></td>
           <td>{{ item.driver }}</td>
           <td>{{ item.vehicle }}</td>
-          <td>{{ item.pickupPrice }}</td>
-          <td>{{ item.dropOffPrice }}</td>
+          <td>
+            <div>Pickup {{ item.vendorPickupPrice }}</div>
+            <div class="subtle">Drop off {{ item.vendorDropOffPrice }}</div>
+          </td>
+          <td>
+            <div>Pickup {{ item.customerPickupPrice }}</div>
+            <div class="subtle">Drop off {{ item.customerDropOffPrice }}</div>
+          </td>
+          <td>{{ item.feeCoaCode || '-' }}</td>
+          <td>{{ item.payableCoaCode || '-' }}</td>
           <td>{{ item.note }}</td>
           <td>
             <button class="action-button" @click="editTransport(item)">Edit</button>
@@ -215,16 +285,16 @@ onMounted(async () => {
 
       <div class="compact-list">
         <div class="list-row list-row-tight">
-          <strong>Pickup</strong>
-          <p class="subtle">Use the pickup rate for guest collection from the airport, harbour, or meeting point to the property.</p>
+          <strong>Harga Vendor</strong>
+          <p class="subtle">Isi rate pickup dan drop off yang dibayar ke vendor atau driver transport.</p>
         </div>
         <div class="list-row list-row-tight">
-          <strong>Drop off</strong>
-          <p class="subtle">Use the drop-off rate for guest transfers from the property to the airport, harbour, or other departure points.</p>
+          <strong>Harga Customer</strong>
+          <p class="subtle">Isi rate pickup dan drop off yang ditagihkan ke tamu untuk add-on transport.</p>
         </div>
         <div class="list-row list-row-tight">
-          <strong>Driver assignment</strong>
-          <p class="subtle">Front office can use this list to choose active drivers for guest transfers and post charges to the folio.</p>
+          <strong>COA Posting</strong>
+          <p class="subtle">Fee COA dipakai untuk margin transport, sedangkan Hutang COA dipakai saat biaya vendor dibukukan.</p>
         </div>
       </div>
     </article>
@@ -279,13 +349,63 @@ onMounted(async () => {
         </label>
 
         <label class="field-stack">
-          <span>Pickup rate</span>
-          <input v-model="transportForm.pickupPriceValue" class="form-control" type="number" min="0" step="1000" />
+          <span>Vendor</span>
+          <Select2Field
+            v-model="transportForm.vendorId"
+            :options="transportVendorOptions"
+            :multiple="false"
+            placeholder="Select transport vendor"
+          />
+        </label>
+
+        <div class="field-span-2 transport-rate-section">
+          <div class="transport-rate-card">
+            <p class="eyebrow-dark">Harga Vendor</p>
+            <div class="transport-rate-grid">
+              <label class="field-stack">
+                <span>Pickup rate</span>
+                <input v-model="transportForm.vendorPickupPriceValue" class="form-control" type="number" min="0" step="1000" />
+              </label>
+              <label class="field-stack">
+                <span>Drop off rate</span>
+                <input v-model="transportForm.vendorDropOffPriceValue" class="form-control" type="number" min="0" step="1000" />
+              </label>
+            </div>
+          </div>
+
+          <div class="transport-rate-card">
+            <p class="eyebrow-dark">Harga Customer</p>
+            <div class="transport-rate-grid">
+              <label class="field-stack">
+                <span>Pickup rate</span>
+                <input v-model="transportForm.customerPickupPriceValue" class="form-control" type="number" min="0" step="1000" />
+              </label>
+              <label class="field-stack">
+                <span>Drop off rate</span>
+                <input v-model="transportForm.customerDropOffPriceValue" class="form-control" type="number" min="0" step="1000" />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <label class="field-stack">
+          <span>Hutang COA</span>
+          <Select2Field
+            v-model="transportForm.payableCoaCode"
+            :options="payableCoaOptions"
+            :multiple="false"
+            placeholder="Select hutang COA"
+          />
         </label>
 
         <label class="field-stack">
-          <span>Drop-off rate</span>
-          <input v-model="transportForm.dropOffPriceValue" class="form-control" type="number" min="0" step="1000" />
+          <span>Fee COA</span>
+          <Select2Field
+            v-model="transportForm.feeCoaCode"
+            :options="revenueCoaOptions"
+            :multiple="false"
+            placeholder="Select fee COA"
+          />
         </label>
 
         <label class="field-stack field-span-2">
@@ -297,14 +417,14 @@ onMounted(async () => {
       <div class="booking-inline-summary">
         <div class="note-cell">
           <strong>Entry rule</strong>
-          <p class="subtle">Enter the assigned driver, then set pickup and drop-off rates so front office can post transport charges quickly.</p>
+          <p class="subtle">Isi harga vendor dan harga customer untuk pickup serta drop off agar FO dan finance memakai rate yang sama.</p>
         </div>
         <div class="note-cell">
           <strong>Pricing check</strong>
           <p class="subtle">
-            Pickup: {{ new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(transportForm.pickupPriceValue || 0)) }}
+            Fee pickup: {{ formatCurrency(Number(transportForm.customerPickupPriceValue || 0) - Number(transportForm.vendorPickupPriceValue || 0)) }}
             |
-            Drop off: {{ new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(transportForm.dropOffPriceValue || 0)) }}
+            Fee drop off: {{ formatCurrency(Number(transportForm.customerDropOffPriceValue || 0) - Number(transportForm.vendorDropOffPriceValue || 0)) }}
           </p>
         </div>
       </div>
@@ -322,3 +442,29 @@ onMounted(async () => {
     </section>
   </div>
 </template>
+
+<style scoped>
+.transport-rate-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.transport-rate-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.transport-rate-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 720px) {
+  .transport-rate-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

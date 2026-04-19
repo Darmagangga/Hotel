@@ -1,8 +1,10 @@
 <script setup>
-import { computed, reactive, ref, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useHotelStore } from '../stores/hotel'
 import api from '../services/api'
+import { encodeInvoicePrintOverrides } from '../utils/invoicePrintOverrides'
+import { loadPrintTemplateSettings, PRINT_TEMPLATE_UPDATED_EVENT } from '../utils/printTemplate'
 
 const hotel = useHotelStore()
 const route = useRoute()
@@ -12,6 +14,9 @@ const invoiceSearch = ref('')
 const selectedInvoiceCode = ref(hotel.invoiceList[0]?.bookingCode ?? '')
 const showInvoiceModal = ref(false)
 const invoiceDocumentMode = ref('invoice')
+const printTemplate = ref(loadPrintTemplateSettings())
+const invoicePrintDraft = ref(null)
+const invoiceHtmlPreviewUrl = ref('')
 const showPaymentModal = ref(false)
 const showPaymentActionModal = ref(false)
 const paymentResult = ref({ tone: '', text: '' })
@@ -189,14 +194,70 @@ const invoicePrintView = computed(() => {
   }
 })
 
+const createInvoicePrintDraft = () => {
+  const invoice = invoicePrintView.value
+  if (!invoice) {
+    return null
+  }
+
+  const rawRoomDetails = Array.isArray(invoice.roomDetails) ? invoice.roomDetails : []
+
+  return {
+    invoice: {
+      invoice_number: invoice.invoiceNo,
+      issued_at: invoice.issueDate,
+      due_at: invoice.dueDate,
+      status: invoice.paymentStatus,
+    },
+    booking: {
+      code: invoice.bookingCode,
+      guest: invoice.guest,
+      checkIn: invoice.checkIn,
+      checkOut: invoice.checkOut,
+      note: invoice.note || '',
+      invoiceStatus: invoice.paymentStatus,
+      roomDetails: invoice.roomLines.map((room, index) => ({
+        room: room.room,
+        roomType: room.roomType,
+        adults: Number(rawRoomDetails[index]?.adults ?? 0),
+        children: Number(rawRoomDetails[index]?.children ?? 0),
+        rateValue: Number(room.rateValue ?? 0),
+        lineTotalValue: Number(room.totalValue ?? 0),
+      })),
+      addons: invoice.addonLines.map((item) => ({
+        addonLabel: item.label,
+        serviceName: item.description,
+        serviceDateLabel: item.serviceDate,
+        quantity: Number(item.qty ?? 1),
+        unitPriceValue: Number(item.qty ?? 0) > 0 ? Math.round(Number(item.amountValue ?? 0) / Number(item.qty ?? 1)) : Number(item.amountValue ?? 0),
+        totalPriceValue: Number(item.amountValue ?? 0),
+      })),
+      payments: invoice.paymentLines.map((payment) => ({
+        paymentDate: payment.date,
+        transactionLabel: payment.type,
+        method: payment.method,
+        referenceNo: payment.reference,
+        signedAmountValue: Number(payment.amountValue ?? 0),
+      })),
+    },
+    document: {
+      invoiceTitle: 'INVOICE',
+      addonFooterNote: 'Please review this invoice carefully. Payments are considered settled after confirmed receipt.',
+    },
+  }
+}
+
 const openInvoiceModal = (bookingCode) => {
   selectedInvoiceCode.value = bookingCode
   invoiceDocumentMode.value = 'invoice'
   showInvoiceModal.value = true
+  invoicePrintDraft.value = createInvoicePrintDraft()
+  refreshInvoiceHtmlPreview()
 }
 
 const closeInvoiceModal = () => {
   showInvoiceModal.value = false
+  invoiceHtmlPreviewUrl.value = ''
   if (route.query.invoice) {
     const nextQuery = { ...route.query }
     delete nextQuery.invoice
@@ -231,8 +292,45 @@ const buildInvoicePdfUrl = (bookingCode, inline = false) => {
   if (token) {
     params.set('token', token)
   }
+  if (invoiceDocumentMode.value === 'invoice' && invoicePrintDraft.value) {
+    const encodedOverrides = encodeInvoicePrintOverrides(invoicePrintDraft.value)
+    if (encodedOverrides) {
+      params.set('overrides', encodedOverrides)
+    }
+  }
   const query = params.toString()
   return `${baseUrl}/finance/invoices/${bookingCode}/pdf${query ? `?${query}` : ''}`
+}
+
+const buildInvoiceHtmlPreviewUrl = (bookingCode) => {
+  const token = localStorage.getItem('pms_token') || ''
+  const baseUrl = String(api.defaults.baseURL || '').replace(/\/+$/, '')
+  const params = new URLSearchParams()
+  if (token) {
+    params.set('token', token)
+  }
+  if (invoicePrintDraft.value) {
+    const encodedOverrides = encodeInvoicePrintOverrides(invoicePrintDraft.value)
+    if (encodedOverrides) {
+      params.set('overrides', encodedOverrides)
+    }
+  }
+  const query = params.toString()
+  return `${baseUrl}/finance/invoices/${bookingCode}/print${query ? `?${query}` : ''}`
+}
+
+const refreshInvoiceHtmlPreview = () => {
+  if (!selectedInvoice.value || invoiceDocumentMode.value !== 'invoice') {
+    invoiceHtmlPreviewUrl.value = ''
+    return
+  }
+
+  invoiceHtmlPreviewUrl.value = buildInvoiceHtmlPreviewUrl(selectedInvoice.value.bookingCode)
+}
+
+const resetInvoicePrintDraft = () => {
+  invoicePrintDraft.value = createInvoicePrintDraft()
+  refreshInvoiceHtmlPreview()
 }
 
 const openPaymentActionModal = (payment, action) => {
@@ -413,8 +511,23 @@ const loadReports = async () => {
   }
 }
 
+const syncPrintTemplate = () => {
+  printTemplate.value = loadPrintTemplateSettings()
+}
+
 onMounted(async () => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener(PRINT_TEMPLATE_UPDATED_EVENT, syncPrintTemplate)
+  }
   await Promise.all([loadBookings(), loadPayments(), loadReports()])
+})
+
+onBeforeUnmount(() => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.removeEventListener(PRINT_TEMPLATE_UPDATED_EVENT, syncPrintTemplate)
 })
 
 watch(
@@ -433,13 +546,33 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => [selectedInvoiceCode.value, showInvoiceModal.value, invoiceDocumentMode.value],
+  () => {
+    if (!showInvoiceModal.value || invoiceDocumentMode.value !== 'invoice') {
+      return
+    }
+
+    invoicePrintDraft.value = createInvoicePrintDraft()
+    refreshInvoiceHtmlPreview()
+  },
+)
+
 const downloadInvoicePdf = async () => {
   if (!selectedInvoice.value) {
     return
   }
 
+  const params = { size: 'A5', document: invoiceDocumentMode.value }
+  if (invoiceDocumentMode.value === 'invoice' && invoicePrintDraft.value) {
+    const encodedOverrides = encodeInvoicePrintOverrides(invoicePrintDraft.value)
+    if (encodedOverrides) {
+      params.overrides = encodedOverrides
+    }
+  }
+
   const response = await api.get(`/finance/invoices/${selectedInvoice.value.bookingCode}/pdf`, {
-    params: { size: 'A5', document: invoiceDocumentMode.value },
+    params,
     responseType: 'blob',
   })
   const blob = new Blob([response.data], { type: 'application/pdf' })
@@ -463,7 +596,7 @@ const openInvoicePrintPage = () => {
 </script>
 
 <template>
-  <section class="page-grid two">
+  <section class="page-grid two finance-page-grid">
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
@@ -473,22 +606,24 @@ const openInvoicePrintPage = () => {
         <span class="status-badge warning">{{ hotel.financeOpenFolios.length }} open balances</span>
       </div>
 
-      <table v-smart-table class="data-table">
-        <thead>
-          <tr>
-            <th>Posting type</th>
-            <th>Volume</th>
-            <th>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in hotel.financePaymentSummary" :key="item.type">
-            <td><strong>{{ item.type }}</strong></td>
-            <td>{{ item.count }}</td>
-            <td>{{ item.amount }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table v-smart-table class="data-table finance-table">
+          <thead>
+            <tr>
+              <th>Posting type</th>
+              <th>Volume</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in hotel.financePaymentSummary" :key="item.type">
+              <td><strong>{{ item.type }}</strong></td>
+              <td>{{ item.count }}</td>
+              <td>{{ item.amount }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </article>
 
     <article class="panel-card panel-dense">
@@ -500,24 +635,26 @@ const openInvoicePrintPage = () => {
         <span class="status-badge info">Synced from bookings</span>
       </div>
 
-      <table v-smart-table class="data-table">
-        <thead>
-          <tr>
-            <th>Guest</th>
-            <th>Balance</th>
-            <th>Reference</th>
-            <th>Due date</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in hotel.financeOpenFolios" :key="item.invoiceNo">
-            <td><strong>{{ item.guest }}</strong></td>
-            <td>{{ item.balance }}</td>
-            <td>{{ item.invoiceNo }}</td>
-            <td>{{ item.due }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table v-smart-table class="data-table finance-table">
+          <thead>
+            <tr>
+              <th>Guest</th>
+              <th>Balance</th>
+              <th>Reference</th>
+              <th>Due date</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in hotel.financeOpenFolios" :key="item.invoiceNo">
+              <td><strong>{{ item.guest }}</strong></td>
+              <td>{{ item.balance }}</td>
+              <td>{{ item.invoiceNo }}</td>
+              <td>{{ item.due }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </article>
   </section>
 
@@ -554,41 +691,43 @@ const openInvoicePrintPage = () => {
         {{ paymentResult.text }}
       </div>
 
-      <table v-smart-table class="data-table">
-        <thead>
-          <tr>
-            <th>Invoice</th>
-            <th>Guest</th>
-            <th>Stay</th>
-            <th>Total</th>
-            <th>Paid</th>
-            <th>Balance</th>
-            <th>Status</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in filteredInvoices" :key="item.invoiceNo">
-            <td><strong>{{ item.invoiceNo }}</strong></td>
-            <td>{{ item.guest }}</td>
-            <td>{{ item.checkIn }} to {{ item.checkOut }}</td>
-            <td>{{ item.subtotal }}</td>
-            <td>{{ item.paid }}</td>
-            <td>{{ item.balance }}</td>
-            <td>{{ item.paymentStatus }}</td>
-            <td>
-              <div class="modal-actions">
-                <button class="action-button" @click="openInvoiceModal(item.bookingCode)">Preview</button>
-                <button class="action-button primary" @click="openPaymentModal(item.bookingCode)">Payment</button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table v-smart-table class="data-table finance-table">
+          <thead>
+            <tr>
+              <th>Invoice</th>
+              <th>Guest</th>
+              <th>Stay</th>
+              <th>Total</th>
+              <th>Paid</th>
+              <th>Balance</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in filteredInvoices" :key="item.invoiceNo">
+              <td><strong>{{ item.invoiceNo }}</strong></td>
+              <td>{{ item.guest }}</td>
+              <td>{{ item.checkIn }} to {{ item.checkOut }}</td>
+              <td>{{ item.subtotal }}</td>
+              <td>{{ item.paid }}</td>
+              <td>{{ item.balance }}</td>
+              <td>{{ item.paymentStatus }}</td>
+              <td>
+                <div class="modal-actions">
+                  <button class="action-button" @click="openInvoiceModal(item.bookingCode)">Preview</button>
+                  <button class="action-button primary" @click="openPaymentModal(item.bookingCode)">Payment</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </article>
   </section>
 
-  <section class="page-grid two">
+  <section class="page-grid two finance-page-grid">
     <article class="panel-card panel-dense">
       <div class="panel-head panel-head-tight">
         <div>
@@ -598,33 +737,35 @@ const openInvoicePrintPage = () => {
         <span class="status-badge success">{{ hotel.paymentTransactions.length }} posted</span>
       </div>
 
-      <table v-smart-table class="data-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Invoice</th>
-            <th>Type</th>
-            <th>Method</th>
-            <th>Amount</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in recentPayments" :key="item.id">
-            <td>{{ item.paymentDate }}</td>
-            <td><strong>{{ item.invoiceNo }}</strong></td>
-            <td>{{ item.transactionLabel }}</td>
-            <td>{{ item.method }}</td>
-            <td>{{ item.transactionType === 'payment' ? item.amount : `- ${item.amount}` }}</td>
-            <td>
-              <div class="modal-actions">
-                <button v-if="item.canRefund" class="action-button" @click="openPaymentActionModal(item, 'refund')">Refund</button>
-                <button v-if="item.canVoid" class="action-button" @click="openPaymentActionModal(item, 'void')">Void</button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table v-smart-table class="data-table finance-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Invoice</th>
+              <th>Type</th>
+              <th>Method</th>
+              <th>Amount</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in recentPayments" :key="item.id">
+              <td>{{ item.paymentDate }}</td>
+              <td><strong>{{ item.invoiceNo }}</strong></td>
+              <td>{{ item.transactionLabel }}</td>
+              <td>{{ item.method }}</td>
+              <td>{{ item.transactionType === 'payment' ? item.amount : `- ${item.amount}` }}</td>
+              <td>
+                <div class="modal-actions">
+                  <button v-if="item.canRefund" class="action-button" @click="openPaymentActionModal(item, 'refund')">Refund</button>
+                  <button v-if="item.canVoid" class="action-button" @click="openPaymentActionModal(item, 'void')">Void</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </article>
 
     <article class="panel-card panel-dense">
@@ -636,28 +777,30 @@ const openInvoicePrintPage = () => {
         <span class="status-badge info">{{ hotel.generalJournalList.length }} posted</span>
       </div>
 
-      <table v-smart-table class="data-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Journal no.</th>
-            <th>Reference</th>
-            <th>Description</th>
-            <th>Debit</th>
-            <th>Credit</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in recentJournals" :key="item.id">
-            <td>{{ item.journalDate }}</td>
-            <td><strong>{{ item.journalNo }}</strong></td>
-            <td>{{ item.referenceNo }}</td>
-            <td>{{ item.description }}</td>
-            <td>{{ item.debitTotal }}</td>
-            <td>{{ item.creditTotal }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table v-smart-table class="data-table finance-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Journal no.</th>
+              <th>Reference</th>
+              <th>Description</th>
+              <th>Debit</th>
+              <th>Credit</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in recentJournals" :key="item.id">
+              <td>{{ item.journalDate }}</td>
+              <td><strong>{{ item.journalNo }}</strong></td>
+              <td>{{ item.referenceNo }}</td>
+              <td>{{ item.description }}</td>
+              <td>{{ item.debitTotal }}</td>
+              <td>{{ item.creditTotal }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </article>
 
     <article class="panel-card panel-dense">
@@ -746,13 +889,9 @@ const openInvoicePrintPage = () => {
       <article class="invoice-print-sheet">
         <header class="invoice-print-header">
           <div class="invoice-brand-block">
-            <p class="eyebrow-dark">{{ invoiceDocumentMode === 'folio' ? 'Guest folio' : 'Guest invoice' }}</p>
-            <h2>{{ hotel.hotelName }}</h2>
-            <p class="subtle">
-              {{ invoiceDocumentMode === 'folio'
-                ? 'Detailed guest folio for billing reconciliation, settlement history, and front office follow-up.'
-                : 'Guest invoice for room charges, add-ons, and final settlement amount.' }}
-            </p>
+            <p class="eyebrow-dark">{{ printTemplate.documentLabel }}</p>
+            <h2>{{ printTemplate.documentTitle || hotel.hotelName }}</h2>
+            <p class="subtle">{{ printTemplate.tagline }}</p>
           </div>
           <div class="invoice-print-meta invoice-doc-meta">
             <div>
@@ -805,7 +944,6 @@ const openInvoicePrintPage = () => {
               <thead>
                 <tr>
                   <th>Room</th>
-                  <th>Type</th>
                   <th>Pax</th>
                   <th>Rate</th>
                   <th>Nights</th>
@@ -815,7 +953,6 @@ const openInvoicePrintPage = () => {
               <tbody>
                 <tr v-for="room in invoicePrintView.roomLines" :key="room.id">
                   <td><strong>{{ room.room }}</strong></td>
-                  <td>{{ room.roomType }}</td>
                   <td>{{ room.pax }}</td>
                   <td>{{ room.rateLabel }}</td>
                   <td>{{ room.nights }}</td>
@@ -939,15 +1076,119 @@ const openInvoicePrintPage = () => {
           Booking note: {{ invoicePrintView.note }}
         </p>
 
-        <footer class="invoice-print-footer">
+        <p v-if="false && printTemplate.footerNote" class="subtle invoice-print-note invoice-print-note-footer">
+          {{ printTemplate.footerNote }}
+        </p>
+
+        <footer v-if="false" class="invoice-print-footer">
           <div class="invoice-signature-box">
-            <span>Prepared by</span>
+            <span>{{ printTemplate.preparedByLabel }}</span>
           </div>
           <div class="invoice-signature-box">
-            <span>Guest signature</span>
+            <span>{{ printTemplate.approvalLabel }}</span>
           </div>
         </footer>
       </article>
+
+      <section v-if="false && invoiceDocumentMode === 'invoice' && invoicePrintDraft" class="invoice-editor-shell">
+        <article class="panel-card panel-dense invoice-editor-panel">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">TCPDF editor</p>
+              <h3>Manual invoice override</h3>
+              <p class="panel-note">Edit field manual, lalu refresh preview. Download PDF akan memakai nilai override ini.</p>
+            </div>
+          </div>
+
+          <div class="settings-designer-grid">
+            <label class="field-stack">
+              <span>Document title</span>
+              <input v-model="invoicePrintDraft.document.invoiceTitle" class="form-control" type="text" />
+            </label>
+            <label class="field-stack">
+              <span>Invoice number</span>
+              <input v-model="invoicePrintDraft.invoice.invoice_number" class="form-control" type="text" />
+            </label>
+            <label class="field-stack">
+              <span>Invoice date</span>
+              <input v-model="invoicePrintDraft.invoice.issued_at" class="form-control" type="date" />
+            </label>
+            <label class="field-stack">
+              <span>Due date</span>
+              <input v-model="invoicePrintDraft.invoice.due_at" class="form-control" type="date" />
+            </label>
+            <label class="field-stack">
+              <span>Status</span>
+              <input v-model="invoicePrintDraft.invoice.status" class="form-control" type="text" />
+            </label>
+            <label class="field-stack">
+              <span>Guest</span>
+              <input v-model="invoicePrintDraft.booking.guest" class="form-control" type="text" />
+            </label>
+            <label class="field-stack">
+              <span>Check-in</span>
+              <input v-model="invoicePrintDraft.booking.checkIn" class="form-control" type="date" />
+            </label>
+            <label class="field-stack">
+              <span>Check-out</span>
+              <input v-model="invoicePrintDraft.booking.checkOut" class="form-control" type="date" />
+            </label>
+            <label class="field-stack field-span-2">
+              <span>Footer note</span>
+              <textarea v-model="invoicePrintDraft.document.addonFooterNote" class="form-control form-textarea"></textarea>
+            </label>
+          </div>
+
+          <div class="compact-list">
+            <div class="list-row list-row-tight invoice-editor-listhead">
+              <strong>Room rows</strong>
+              <span class="subtle">Nilai ini akan dipakai oleh preview backend dan file PDF.</span>
+            </div>
+            <div v-for="(room, index) in invoicePrintDraft.booking.roomDetails" :key="`room-${index}`" class="invoice-editor-grid">
+              <input v-model="room.room" class="form-control" type="text" placeholder="Room" />
+              <input v-model="room.roomType" class="form-control" type="text" placeholder="Room type" />
+              <input v-model.number="room.rateValue" class="form-control" type="number" min="0" step="1" placeholder="Rate" />
+              <input v-model.number="room.lineTotalValue" class="form-control" type="number" min="0" step="1" placeholder="Total" />
+            </div>
+          </div>
+
+          <div class="compact-list" style="margin-top: 12px;">
+            <div class="list-row list-row-tight invoice-editor-listhead">
+              <strong>Add-on rows</strong>
+              <span class="subtle">Jumlah dan nominal add-on bisa diubah manual.</span>
+            </div>
+            <div v-for="(addon, index) in invoicePrintDraft.booking.addons" :key="`addon-${index}`" class="invoice-editor-grid invoice-editor-grid-addon">
+              <input v-model="addon.addonLabel" class="form-control" type="text" placeholder="Item" />
+              <input v-model="addon.serviceName" class="form-control" type="text" placeholder="Service" />
+              <input v-model="addon.serviceDateLabel" class="form-control" type="text" placeholder="Service date" />
+              <input v-model.number="addon.quantity" class="form-control" type="number" min="0" step="1" placeholder="Qty" />
+              <input v-model.number="addon.totalPriceValue" class="form-control" type="number" min="0" step="1" placeholder="Total" />
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button class="action-button" @click="resetInvoicePrintDraft">Reset manual edit</button>
+            <button class="action-button primary" @click="refreshInvoiceHtmlPreview">Refresh TCPDF preview</button>
+          </div>
+        </article>
+
+        <article class="panel-card panel-dense invoice-editor-preview">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">Backend preview</p>
+              <h3>HTML preview from invoice-print</h3>
+            </div>
+          </div>
+
+          <iframe
+            v-if="invoiceHtmlPreviewUrl"
+            :src="invoiceHtmlPreviewUrl"
+            class="invoice-preview-frame"
+            title="Invoice TCPDF preview"
+          ></iframe>
+          <p v-else class="subtle">Preview belum dimuat.</p>
+        </article>
+      </section>
 
       <div class="compact-list invoice-payment-actions">
         <div v-for="payment in selectedInvoice.payments" :key="payment.id" class="list-row list-row-tight">

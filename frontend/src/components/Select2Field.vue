@@ -38,6 +38,10 @@ const normalizedOptions = computed(() => (
     : []
 ))
 
+const optionsSignature = computed(() =>
+  JSON.stringify(normalizedOptions.value.map((option) => [option.value, option.label])),
+)
+
 const ensureSelect2 = async () => {
   if (!select2Ready) {
     window.$ = $
@@ -87,7 +91,6 @@ const focusSearchField = (attempt = 0) => {
 
   if (searchField) {
     searchField.focus()
-    searchField.click()
     return
   }
 
@@ -122,6 +125,16 @@ const destroySelect2 = () => {
   $(selectRef.value).select2('destroy')
 }
 
+const guardOpenSelect2Interactions = () => {
+  const dropdownParent = resolveDropdownParent()
+  dropdownParent
+    .find('.select2-container, .select2-dropdown, .select2-results, .select2-search__field')
+    .off('.select2guard')
+    .on('mousedown.select2guard click.select2guard', (event) => {
+      event.stopPropagation()
+    })
+}
+
 const initSelect2 = async () => {
   await ensureSelect2()
   await nextTick()
@@ -129,6 +142,9 @@ const initSelect2 = async () => {
   if (!selectRef.value) {
     return
   }
+
+  const modalCard = selectRef.value.closest('.modal-card')
+  const previousScrollTop = modalCard?.scrollTop ?? 0
 
   destroySelect2()
 
@@ -144,6 +160,7 @@ const initSelect2 = async () => {
       dropdownCssClass: instanceId,
     })
     .on('select2:open', () => {
+      guardOpenSelect2Interactions()
       focusSearchField()
     })
     .on('change.select2field', () => {
@@ -158,14 +175,17 @@ const initSelect2 = async () => {
     })
 
   syncValue()
+
+  if (modalCard) {
+    modalCard.scrollTop = previousScrollTop
+  }
 }
 
 watch(
-  () => normalizedOptions.value,
+  () => optionsSignature.value,
   async () => {
     await initSelect2()
   },
-  { deep: true },
 )
 
 watch(

@@ -62,6 +62,11 @@ Route::middleware('pms.permission:finance')->group(function () {
 Route::middleware('pms.permission:inventory')->group(function () {
     Route::get('/inventory', [InventoryController::class, 'index']);
     Route::post('/inventory/items', [InventoryController::class, 'storeItem']);
+    Route::put('/inventory/items/{item}', [InventoryController::class, 'updateItem']);
+    Route::get('/master-units', [InventoryController::class, 'listUnits']);
+    Route::post('/master-units', [InventoryController::class, 'storeUnit']);
+    Route::put('/master-units/{id}', [InventoryController::class, 'updateUnit']);
+    Route::delete('/master-units/{id}', [InventoryController::class, 'deleteUnit']);
     Route::post('/inventory/purchases', [InventoryController::class, 'storePurchase']);
     Route::post('/inventory/issues', [InventoryController::class, 'storeIssue']);
 });
@@ -100,6 +105,7 @@ Route::middleware('pms.permission:dashboard')->group(function () {
 Route::middleware('pms.permission:settings')->group(function () {
     Route::get('/settings/policies', [SettingsController::class, 'policies']);
     Route::put('/settings/policies', [SettingsController::class, 'updatePolicies']);
+    Route::post('/settings/reset-transactions', [SettingsController::class, 'resetTransactions']);
 });
 
 Route::middleware('pms.permission:roles')->group(function () {

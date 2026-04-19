@@ -29,20 +29,31 @@ class AuthController extends Controller
     public function login(Request $request)
     {
         $request->validate([
-            'email' => 'required',
+            'email' => 'nullable',
+            'username' => 'nullable',
             'password' => 'required'
         ]);
 
-        // Simulated robust login for PMS Demo
-        // In a real app, use Hash::check against User model
-        $email = $request->email;
+        $credential = trim((string) ($request->input('username') ?: $request->input('email') ?: ''));
         $password = $request->password;
+
+        if ($credential === '') {
+            return response()->json([
+                'message' => 'Username atau email wajib diisi.',
+                'errors' => [
+                    'username' => ['Username atau email wajib diisi.'],
+                ],
+            ], 422);
+        }
 
         // 1. Cek di Database Asli
         $userRecord = DB::table('users')
             ->leftJoin('roles', 'users.role_id', '=', 'roles.id')
             ->select('users.*', 'roles.permissions', 'roles.name as role')
-            ->where('email', $email)
+            ->where(function ($query) use ($credential) {
+                $query->where('users.email', $credential)
+                    ->orWhere('users.username', $credential);
+            })
             ->first();
 
         if ($userRecord && Hash::check($password, $userRecord->password)) {
@@ -73,11 +84,12 @@ class AuthController extends Controller
         }
 
         // 2. Jika tidak ada di DB, fallback ke Demo Accounts (Agar UI tetap jalan bagi penilai)
-        if ($email === 'admin@sagarabay.com' && $password === 'admin123') {
+        if (in_array($credential, ['admin', 'admin@sagarabay.com'], true) && $password === 'admin123') {
             $user = [
                 'id' => 991,
                 'name' => 'General Manager (Demo)',
                 'email' => 'admin@sagarabay.com',
+                'username' => 'admin',
                 'role' => 'admin',
                 'permissions' => ['dashboard', 'bookings', 'rooms', 'finance', 'journals', 'coa', 'inventory', 'transport', 'activities', 'reports', 'users', 'roles']
             ];
@@ -96,11 +108,12 @@ class AuthController extends Controller
             return response()->json(['token' => $this->issueToken($user), 'user' => $user]);
         }
 
-        if ($email === 'fo@sagarabay.com' && $password === 'fo123') {
+        if (in_array($credential, ['fo', 'fo@sagarabay.com'], true) && $password === 'fo123') {
             $user = [
                 'id' => 992,
                 'name' => 'Resepsionis (Demo)',
                 'email' => 'fo@sagarabay.com',
+                'username' => 'fo',
                 'role' => 'frontdesk',
                 'permissions' => ['dashboard', 'bookings', 'rooms', 'activities']
             ];
@@ -119,11 +132,12 @@ class AuthController extends Controller
             return response()->json(['token' => $this->issueToken($user), 'user' => $user]);
         }
 
-        if ($email === 'hk@sagarabay.com' && $password === 'hk123') {
+        if (in_array($credential, ['hk', 'hk@sagarabay.com'], true) && $password === 'hk123') {
             $user = [
                 'id' => 993,
                 'name' => 'Housekeeping (Demo)',
                 'email' => 'hk@sagarabay.com',
+                'username' => 'hk',
                 'role' => 'housekeeping',
                 'permissions' => ['rooms', 'inventory']
             ];

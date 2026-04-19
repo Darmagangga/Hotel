@@ -6,11 +6,68 @@ use App\Http\Controllers\Controller;
 use App\Models\InventoryItem;
 use App\Models\InventoryMovement;
 use App\Models\Room;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class InventoryController extends Controller
 {
+    private function ensureUnitTable(): void
+    {
+        if (!Schema::hasTable('master_units')) {
+            Schema::create('master_units', function (Blueprint $table) {
+                $table->id();
+                $table->string('name')->unique();
+                $table->boolean('is_active')->default(true);
+                $table->timestamps();
+            });
+        }
+
+        if (DB::table('master_units')->count() === 0 && Schema::hasTable('inventory_items')) {
+            $seedUnits = InventoryItem::query()
+                ->select('unit')
+                ->whereNotNull('unit')
+                ->where('unit', '!=', '')
+                ->distinct()
+                ->pluck('unit')
+                ->filter()
+                ->values();
+
+            foreach ($seedUnits as $unit) {
+                DB::table('master_units')->updateOrInsert(
+                    ['name' => trim((string) $unit)],
+                    [
+                        'is_active' => true,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ],
+                );
+            }
+        }
+    }
+
+    private function unitRows(): array
+    {
+        $this->ensureUnitTable();
+
+        return DB::table('master_units')
+            ->orderBy('name')
+            ->get()
+            ->map(function ($row) {
+                $name = trim((string) ($row->name ?? ''));
+
+                return [
+                    'id' => (int) $row->id,
+                    'name' => $name,
+                    'itemCount' => InventoryItem::query()->where('unit', $name)->count(),
+                    'isActive' => (bool) ($row->is_active ?? true),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
     private function formatCurrency(float $amount): string
     {
         return 'IDR ' . number_format($amount, 0, ',', '.');
@@ -353,6 +410,141 @@ class InventoryController extends Controller
             'message' => "Item {$item->item_name} berhasil ditambahkan ke inventory master.",
             'data' => $this->itemSnapshot($item),
         ], 201);
+    }
+
+    public function listUnits()
+    {
+        return response()->json([
+            'data' => $this->unitRows(),
+        ]);
+    }
+
+    public function storeUnit(Request $request)
+    {
+        $this->ensureUnitTable();
+
+        $payload = $request->validate([
+            'name' => ['required', 'string', 'max:100'],
+        ]);
+
+        $name = trim((string) $payload['name']);
+
+        if (DB::table('master_units')->whereRaw('LOWER(name) = ?', [strtolower($name)])->exists()) {
+            return response()->json([
+                'message' => 'Satuan sudah ada.',
+                'errors' => ['name' => ['Satuan sudah ada.']],
+            ], 422);
+        }
+
+        DB::table('master_units')->insert([
+            'name' => $name,
+            'is_active' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return response()->json([
+            'message' => "Satuan {$name} berhasil ditambahkan.",
+            'data' => $this->unitRows(),
+        ], 201);
+    }
+
+    public function updateUnit(Request $request, int $id)
+    {
+        $this->ensureUnitTable();
+
+        $payload = $request->validate([
+            'name' => ['required', 'string', 'max:100'],
+        ]);
+
+        $unit = DB::table('master_units')->where('id', $id)->first();
+        if (!$unit) {
+            return response()->json(['message' => 'Satuan tidak ditemukan.'], 404);
+        }
+
+        $name = trim((string) $payload['name']);
+        $existing = DB::table('master_units')
+            ->whereRaw('LOWER(name) = ?', [strtolower($name)])
+            ->where('id', '!=', $id)
+            ->exists();
+
+        if ($existing) {
+            return response()->json([
+                'message' => 'Satuan sudah ada.',
+                'errors' => ['name' => ['Satuan sudah ada.']],
+            ], 422);
+        }
+
+        DB::transaction(function () use ($id, $name, $unit) {
+            DB::table('master_units')->where('id', $id)->update([
+                'name' => $name,
+                'updated_at' => now(),
+            ]);
+
+            InventoryItem::query()
+                ->where('unit', trim((string) $unit->name))
+                ->update([
+                    'unit' => $name,
+                    'updated_at' => now(),
+                ]);
+        });
+
+        return response()->json([
+            'message' => "Satuan {$name} berhasil diperbarui.",
+            'data' => $this->unitRows(),
+        ]);
+    }
+
+    public function deleteUnit(int $id)
+    {
+        $this->ensureUnitTable();
+
+        $unit = DB::table('master_units')->where('id', $id)->first();
+        if (!$unit) {
+            return response()->json(['message' => 'Satuan tidak ditemukan.'], 404);
+        }
+
+        $name = trim((string) ($unit->name ?? ''));
+        if (InventoryItem::query()->where('unit', $name)->exists()) {
+            return response()->json([
+                'message' => 'Satuan tidak bisa dihapus karena masih dipakai oleh barang.',
+                'errors' => ['name' => ['Satuan masih dipakai oleh barang.']],
+            ], 422);
+        }
+
+        DB::table('master_units')->where('id', $id)->delete();
+
+        return response()->json([
+            'message' => "Satuan {$name} berhasil dihapus.",
+            'data' => $this->unitRows(),
+        ]);
+    }
+
+    public function updateItem(Request $request, InventoryItem $item)
+    {
+        $payload = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'category' => ['required', 'string', 'max:100'],
+            'trackingType' => ['required', 'string', 'max:50'],
+            'unit' => ['required', 'string', 'max:50'],
+            'inventoryCoa' => ['required', 'string', 'max:255'],
+            'expenseCoa' => ['required', 'string', 'max:255'],
+            'reorderLevel' => ['nullable', 'integer', 'min:0'],
+        ]);
+
+        $item->update([
+            'item_name' => $payload['name'],
+            'category' => $payload['category'],
+            'unit' => $payload['unit'],
+            'min_stock' => (int) ($payload['reorderLevel'] ?? 0),
+            'inventory_coa_code' => $payload['inventoryCoa'],
+            'expense_coa_code' => $payload['expenseCoa'],
+        ]);
+
+        return response()->json([
+            'message' => "Item {$item->item_name} berhasil diperbarui.",
+            'data' => $this->itemSnapshot($item->fresh()),
+        ]);
     }
 
     public function storePurchase(Request $request)

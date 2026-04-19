@@ -25,6 +25,14 @@
   --font-body: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-heading: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --border-radius: 6px;
+  --print-accent: #1f4b99;
+  --print-accent-soft: rgba(31, 75, 153, 0.08);
+  --print-font-family: "Times New Roman", Georgia, serif;
+  --print-font-size: 9.5pt;
+  --print-sheet-width: 5.8in;
+  --print-title-spacing: 0.12em;
+  --print-section-gap: 5px;
+  --print-sheet-padding: 0.1in;
   color: var(--text);
   font-family: var(--font-body);
   line-height: 1.5;
@@ -69,11 +77,17 @@ h3 {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 0;
   background: var(--bg);
+  overflow: hidden;
+  transition: grid-template-columns 0.2s ease;
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
 }
 
 .sidebar-panel {
@@ -84,9 +98,35 @@ h3 {
   flex-direction: column;
   gap: 16px;
   border-right: 1px solid var(--sidebar-deep);
-  min-height: 100vh;
+  height: 100vh;
   box-shadow: 2px 0 8px rgba(0,0,0,0.15);
   z-index: 10;
+  overflow: hidden;
+  transition: opacity 0.18s ease, transform 0.18s ease, padding 0.18s ease;
+}
+
+.sidebar-panel.is-collapsed {
+  opacity: 0;
+  pointer-events: none;
+  padding-left: 0;
+  padding-right: 0;
+  border-right: 0;
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 4px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .brand-lockup {
@@ -222,8 +262,33 @@ h3 {
   font-weight: 600;
 }
 
+.nav-group-trigger {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  justify-content: space-between;
+  cursor: pointer;
+  text-align: left;
+}
+
+.nav-group-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.nav-group-caret {
+  color: rgba(237, 243, 248, 0.72);
+  font-size: 1rem;
+  line-height: 1;
+}
+
 .nav-group.active .nav-group-label {
   background: rgba(255, 255, 255, 0.05);
+}
+
+.nav-group.expanded .nav-group-label {
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .nav-submenu {
@@ -285,10 +350,14 @@ h3 {
 
 .workspace {
   min-width: 0;
-  display: grid;
-  grid-template-rows: auto auto 1fr;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
   position: relative;
   z-index: 1;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .topbar {
@@ -324,6 +393,22 @@ h3 {
   gap: 4px;
   cursor: pointer;
   box-shadow: var(--shadow-sm);
+}
+
+.sidebar-collapse-toggle {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: #ffffff;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  color: var(--text-main);
+  font-size: 1rem;
+  font-weight: 700;
 }
 
 .mobile-nav-toggle span {
@@ -427,12 +512,38 @@ h3 {
   gap: 16px;
   min-width: 0;
   width: 100%;
+  min-height: 0;
+}
+
+.page-notice-frame {
+  overflow: visible;
+}
+
+.main-page-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sidebar-user-actions {
+  padding-top: 4px;
+}
+
+.sidebar-logout-button {
+  width: 100%;
+  border: 1px solid var(--border-color);
 }
 
 .summary-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+}
+
+.summary-strip > *,
+.dashboard-grid > *,
+.page-grid > * {
+  min-width: 0;
 }
 
 .dashboard-command-deck {
@@ -726,13 +837,24 @@ h3 {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  table-layout: fixed;
-  min-width: 720px;
+  table-layout: auto;
+  min-width: 100%;
+  max-width: 100%;
 }
 
 .table-scroll {
   width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.panel-card > .data-table,
+.modal-card > .data-table {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .data-table th,
@@ -741,7 +863,9 @@ h3 {
   padding: 12px 10px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
-  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .data-table th {
@@ -786,6 +910,11 @@ h3 {
   table-layout: auto;
 }
 
+.finance-table {
+  min-width: 620px;
+  table-layout: auto;
+}
+
 .table-scroll {
   max-width: 100%;
 }
@@ -797,26 +926,47 @@ h3 {
 
 .booking-data-table th,
 .booking-data-table td {
-  word-wrap: normal;
-  word-break: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .inventory-log-table th,
 .inventory-log-table td {
-  word-wrap: normal;
-  word-break: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .room-master-table th,
 .room-master-table td {
-  word-wrap: normal;
-  word-break: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .dashboard-table th,
 .dashboard-table td {
-  word-wrap: normal;
-  word-break: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.activity-data-table {
+  min-width: 680px;
+}
+
+.activity-data-table th:first-child,
+.activity-data-table td:first-child {
+  min-width: 98px;
+  white-space: nowrap;
+}
+
+.activity-data-table th:last-child,
+.activity-data-table td:last-child {
+  width: 96px;
+  min-width: 96px;
+  white-space: nowrap;
+}
+
+.activity-data-table .action-button {
+  white-space: nowrap;
 }
 
 .inventory-log-table th:nth-child(1),
@@ -996,11 +1146,51 @@ h3 {
   min-width: 220px;
 }
 
+.booking-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.booking-filter-row > * {
+  min-width: 0;
+}
+
+.booking-filter-row .form-control {
+  width: 148px;
+}
+
+.booking-filter-row .toolbar-search {
+  width: 220px;
+  min-width: 220px;
+}
+
 .booking-form-grid,
 .booking-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.booking-addon-entry-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.booking-addon-entry-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.booking-addon-entry-row-scooter {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.booking-addon-item-field {
+  grid-column: 1 / -1;
 }
 
 .field-stack {
@@ -1255,13 +1445,29 @@ h3 {
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.85fr);
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
+  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 .booking-create-main,
 .booking-create-sidebar {
   display: grid;
   gap: 18px;
+  min-height: 0;
+}
+
+.booking-create-main {
+  align-content: start;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.booking-create-sidebar {
+  align-content: start;
+  overflow-y: auto;
+  padding-right: 6px;
 }
 
 .booking-create-head {
@@ -1404,10 +1610,26 @@ h3 {
 
   .booking-create-shell {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
 
   .booking-create-grid {
     grid-template-columns: 1fr;
+  }
+
+  .booking-create-main {
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .booking-create-summary {
+    position: static;
+  }
+
+  .booking-create-sidebar {
+    overflow: visible;
+    padding-right: 0;
   }
 
   .booking-room-table-head {
@@ -1424,6 +1646,12 @@ h3 {
 
   .booking-create-head {
     flex-direction: column;
+  }
+}
+
+@media (max-width: 1500px) {
+  .finance-page-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1489,6 +1717,33 @@ h3 {
   padding: 18px;
   position: relative;
   margin: auto 0;
+}
+
+.modal-card-scroll-lock {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-scroll-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+@media (min-width: 961px) {
+  .app-shell:not(.no-shell) .modal-backdrop {
+    left: 260px;
+  }
+
+  .app-shell:not(.no-shell) .modal-card {
+    width: min(860px, calc(100vw - 260px - 48px));
+  }
+
+  .app-shell:not(.no-shell) .invoice-modal-card {
+    width: min(1080px, calc(100vw - 260px - 48px));
+  }
 }
 
 .modal-actions {
@@ -1652,11 +1907,13 @@ h3 {
 }
 
 .stayview-card {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .stayview-head-actions,
@@ -1669,6 +1926,7 @@ h3 {
 
 .stayview-summary {
   margin-bottom: 2px;
+  flex: 0 0 auto;
 }
 
 .stayview-toolbar {
@@ -1681,6 +1939,7 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 4px;
   background: linear-gradient(180deg, #f6f9fb 0%, #edf2f5 100%);
+  flex: 0 0 auto;
 }
 
 .stayview-legend-item {
@@ -1738,6 +1997,7 @@ h3 {
   border-radius: 4px;
   background: #edf2f5;
   max-width: 100%;
+  flex: 0 0 auto;
 }
 
 .stayview-sheet {
@@ -2065,6 +2325,148 @@ h3 {
   border-top: 1px dashed var(--line-strong);
 }
 
+.invoice-print-note-footer {
+  color: var(--muted);
+}
+
+.invoice-editor-shell {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.invoice-editor-panel,
+.invoice-editor-preview {
+  min-width: 0;
+}
+
+.invoice-editor-listhead {
+  align-items: baseline;
+}
+
+.invoice-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.invoice-editor-grid-addon {
+  grid-template-columns: 1.4fr 1.2fr 1fr 90px 120px;
+}
+
+.invoice-preview-frame {
+  width: 100%;
+  min-height: 920px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.settings-print-grid {
+  align-items: start;
+}
+
+.settings-designer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-color-field {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-color-input {
+  width: 54px;
+  height: 42px;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--border-radius);
+  background: #ffffff;
+}
+
+.settings-toggle-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--border-radius);
+  background: var(--panel-soft);
+}
+
+.settings-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+.print-designer-preview {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--preview-accent, var(--print-accent));
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  color: #111827;
+  font-family: var(--preview-font, var(--print-font-family));
+  font-size: var(--preview-size, var(--print-font-size));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.print-designer-preview.compact {
+  gap: 9px;
+}
+
+.print-designer-preview.has-header-band .print-designer-header {
+  padding-bottom: 12px;
+  border-bottom: 3px solid var(--preview-accent, var(--print-accent));
+}
+
+.print-designer-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.print-designer-brand,
+.print-designer-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.print-designer-brand h2 {
+  color: var(--preview-accent, var(--print-accent));
+  font-size: 1.7em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.print-designer-meta {
+  min-width: 180px;
+  justify-items: end;
+}
+
+.print-designer-meta > div {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+}
+
+.print-designer-preview.tinted .invoice-charge-row.balance {
+  background: var(--preview-accent-soft, var(--print-accent-soft));
+}
+
 @media (max-width: 1260px) {
   .dashboard-command-deck,
   .summary-strip,
@@ -2124,6 +2526,10 @@ h3 {
     display: inline-flex;
   }
 
+  .sidebar-collapse-toggle {
+    display: none;
+  }
+
   .topbar {
     padding: 14px 16px;
   }
@@ -2168,9 +2574,25 @@ h3 {
     min-width: 0;
   }
 
+  .booking-filter-row {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .booking-filter-row .form-control,
+  .booking-filter-row .toolbar-search {
+    width: 100%;
+    min-width: 0;
+  }
+
   .booking-form-grid,
   .booking-detail-grid,
+  .settings-designer-grid,
+  .invoice-editor-shell,
+  .invoice-editor-grid,
+  .invoice-editor-grid-addon,
   .booking-inline-summary,
+  .booking-addon-entry-row,
   .invoice-doc-grid,
   .invoice-print-grid,
   .invoice-summary-grid {
@@ -2260,7 +2682,7 @@ h3 {
   }
 
   .data-table {
-    min-width: 640px;
+    min-width: 100%;
   }
 
   .brand-lockup h1 {
@@ -2293,13 +2715,12 @@ h3 {
   }
 
   .data-table {
-    min-width: 580px;
+    min-width: 100%;
   }
 }
 
 @media print {
   @page {
-    size: A5 portrait;
     margin: 0.3in;
   }
 
@@ -2359,10 +2780,10 @@ h3 {
 
   html,
   body {
-    width: 5.5in;
-    min-width: 5.5in;
+    width: var(--print-sheet-width);
+    min-width: var(--print-sheet-width);
     background: #ffffff !important;
-    font-size: 9.5pt;
+    font-size: var(--print-font-size);
     line-height: 1.3;
   }
 
@@ -2374,13 +2795,13 @@ h3 {
   .invoice-print-sheet {
     width: 100% !important;
     min-height: auto !important;
-    padding: 0.12in !important;
-    gap: 7px !important;
-    border: 1.4pt solid #111827 !important;
+    padding: var(--print-sheet-padding) !important;
+    gap: var(--print-section-gap) !important;
+    border: 1.4pt solid var(--print-accent) !important;
     border-radius: 0 !important;
     background: #ffffff !important;
-    font-family: "Times New Roman", Georgia, serif !important;
-    font-size: 8.6pt;
+    font-family: var(--print-font-family) !important;
+    font-size: calc(var(--print-font-size) - 0.9pt);
     color: #111111 !important;
   }
 
@@ -2388,16 +2809,16 @@ h3 {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
     padding-bottom: 7px;
-    border-bottom: 1pt solid #111827 !important;
+    border-bottom: 1pt solid var(--print-accent) !important;
   }
 
   .invoice-print-header h2 {
     margin: 0;
     font-size: 18pt;
     line-height: 1.05;
-    letter-spacing: 0.22em;
+    letter-spacing: var(--print-title-spacing);
     text-transform: uppercase;
-    color: #111111 !important;
+    color: var(--print-accent) !important;
   }
 
   .invoice-brand-block,
@@ -2424,7 +2845,7 @@ h3 {
   }
 
   .invoice-doc-grid {
-    border-bottom: 1pt dotted #6b7280;
+    border-bottom: 1pt dotted var(--print-accent);
     padding-bottom: 6px;
   }
 
@@ -2454,7 +2875,7 @@ h3 {
     display: flex !important;
     gap: 8px;
     padding: 4px 0 3px !important;
-    border-bottom: 1pt dotted #6b7280 !important;
+    border-bottom: 1pt dotted var(--print-accent) !important;
     align-items: end;
   }
 
@@ -2466,7 +2887,7 @@ h3 {
   }
 
   .invoice-charge-summary {
-    border: 1pt dotted #6b7280 !important;
+    border: 1pt dotted var(--print-accent) !important;
     border-radius: 0;
     background: transparent !important;
   }
@@ -2479,7 +2900,11 @@ h3 {
 
   .invoice-charge-row.balance {
     font-size: 9.4pt;
-    border-top: 1pt solid #111827;
+    border-top: 1pt solid var(--print-accent);
+  }
+
+  body[data-print-summary-tint='true'] .invoice-charge-row.balance {
+    background: var(--print-accent-soft) !important;
   }
 
   .table-scroll {
@@ -2509,8 +2934,8 @@ h3 {
     font-size: 6.8pt;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    border-top: 1pt dotted #6b7280 !important;
-    border-bottom: 1pt dotted #6b7280 !important;
+    border-top: 1pt dotted var(--print-accent) !important;
+    border-bottom: 1pt dotted var(--print-accent) !important;
   }
 
   .invoice-print-footer {
@@ -2522,7 +2947,11 @@ h3 {
   .invoice-signature-box {
     min-height: 46px;
     align-items: flex-end;
-    border-top: 1pt solid #111827 !important;
+    border-top: 1pt solid var(--print-accent) !important;
     padding-top: 14px !important;
+  }
+
+  body[data-print-header-band='false'] .invoice-print-header {
+    border-bottom-style: dotted !important;
   }
 }

@@ -14,7 +14,6 @@ const showRoomModal = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const roomMasters = ref([])
-const roomTypeItems = ref([])
 const housekeepingQueue = ref([])
 const pagination = reactive({
   page: 1,
@@ -26,29 +25,11 @@ const pagination = reactive({
 const roomForm = reactive({
   code: '',
   name: '',
-  roomTypeId: '',
   coaReceivableCode: '',
   coaRevenueCode: '',
 })
 
 const filteredRoomMasters = computed(() => roomMasters.value)
-const roomTypeOptions = computed(() => roomTypeItems.value)
-const groupedRackRows = computed(() => {
-  const groups = roomMasters.value.reduce((map, room) => {
-    const floorKey = room.floor ? `Floor ${room.floor}` : 'No Floor'
-    const cells = map.get(floorKey) ?? []
-    cells.push({
-      no: room.code,
-      status: String(room.status ?? '').toLowerCase(),
-      guest: room.note || room.name || 'No note',
-      flag: String(room.status ?? '').slice(0, 2).toUpperCase() || 'NA',
-    })
-    map.set(floorKey, cells)
-    return map
-  }, new Map())
-
-  return [...groups.entries()].map(([floor, cells]) => ({ floor, cells }))
-})
 const receivableCoaOptions = computed(() => {
   const options = hotel.coaList
     .filter((account) => account.category === 'Asset')
@@ -83,7 +64,6 @@ const resetRoomForm = (clearResult = true) => {
   editingCode.value = ''
   roomForm.code = ''
   roomForm.name = ''
-  roomForm.roomTypeId = ''
   roomForm.coaReceivableCode = ''
   roomForm.coaRevenueCode = ''
 
@@ -97,16 +77,10 @@ const closeRoomModal = (clearResult = true) => {
   resetRoomForm(clearResult)
 }
 
-const openCreateRoomModal = () => {
-  resetRoomForm()
-  showRoomModal.value = true
-}
-
 const editRoom = (room) => {
   editingCode.value = room.code
   roomForm.code = room.code
   roomForm.name = room.name
-  roomForm.roomTypeId = String(room.roomTypeId ?? '')
   roomForm.coaReceivableCode = room.coaReceivableCode ?? ''
   roomForm.coaRevenueCode = room.coaRevenueCode ?? ''
   roomResult.value = { tone: '', text: '' }
@@ -114,16 +88,9 @@ const editRoom = (room) => {
 }
 
 const loadRoomDependencies = async () => {
-  const [coaResponse, roomTypeResponse] = await Promise.all([
-    api.get('/coa-accounts', { params: { per_page: 100 } }),
-    api.get('/room-types'),
-  ])
+  const coaResponse = await api.get('/coa-accounts', { params: { per_page: 100 } })
 
   hotel.setCoaAccounts(Array.isArray(coaResponse.data?.data) ? coaResponse.data.data : [])
-  roomTypeItems.value = (Array.isArray(roomTypeResponse.data?.data) ? roomTypeResponse.data.data : []).map((item) => ({
-    value: String(item.id),
-    label: item.name,
-  }))
 }
 
 const loadRooms = async () => {
@@ -192,7 +159,6 @@ const submitRoom = async () => {
     if (editingCode.value) {
       const response = await api.put(`/rooms/${editingCode.value}`, {
         name: roomForm.name,
-        roomTypeId: Number(roomForm.roomTypeId),
         coaReceivableCode: roomForm.coaReceivableCode || null,
         coaRevenueCode: roomForm.coaRevenueCode || null,
       })
@@ -202,18 +168,11 @@ const submitRoom = async () => {
         text: response.data?.message ?? `Room master ${editingCode.value} was updated successfully.`,
       }
     } else {
-      const response = await api.post('/rooms', {
-        code: roomForm.code,
-        name: roomForm.name,
-        roomTypeId: Number(roomForm.roomTypeId),
-        coaReceivableCode: roomForm.coaReceivableCode || null,
-        coaRevenueCode: roomForm.coaRevenueCode || null,
-      })
-
       roomResult.value = {
-        tone: 'success',
-        text: response.data?.message ?? `Room master ${roomForm.code} was added successfully.`,
+        tone: 'error',
+        text: 'Setup ini memakai 8 kamar tetap. Tambah kamar baru dinonaktifkan agar operasional tetap sesuai properti.',
       }
+      return
     }
 
     await loadRooms()
@@ -258,18 +217,15 @@ onMounted(async () => {
     <LoadingState v-if="loading" label="Loading room data from the database..." overlay />
     <div class="panel-head panel-head-tight">
       <div>
-        <p class="eyebrow-dark">Room master list</p>
+        <p class="eyebrow-dark">8-room setup</p>
         <h3>Rooms</h3>
       </div>
       <div class="topbar-actions">
         <input
           v-model="roomSearch"
           class="toolbar-search"
-          placeholder="Search code / name / type / COA"
+          placeholder="Search code / room / COA"
         />
-        <button class="action-button primary" @click="openCreateRoomModal">
-          Add room master
-        </button>
       </div>
     </div>
 
@@ -283,7 +239,6 @@ onMounted(async () => {
           <tr>
             <th>Code</th>
             <th>Room name</th>
-            <th>Type</th>
             <th>Receivable COA</th>
             <th>Revenue COA</th>
             <th>Status</th>
@@ -294,7 +249,6 @@ onMounted(async () => {
           <tr v-for="room in filteredRoomMasters" :key="room.code">
             <td><strong>{{ room.code }}</strong></td>
             <td>{{ room.name }}</td>
-            <td>{{ room.type }}</td>
             <td>{{ room.coaReceivable }}</td>
             <td>{{ room.coaRevenue }}</td>
             <td>{{ room.status }}</td>
@@ -308,123 +262,60 @@ onMounted(async () => {
 
   </section>
 
-  <section class="page-grid two">
-    <article class="panel-card panel-dense">
-      <div class="panel-head panel-head-tight">
-        <div>
-          <p class="eyebrow-dark">Room view</p>
-          <h3>Monitor room rack</h3>
-        </div>
-        <div class="kpi-inline">
-          <span>VC vacant clean ready to sell</span>
-          <span>OC occupied</span>
-          <span>OOO out of order</span>
-        </div>
-      </div>
-
-      <div class="table-toolbar">
-        <div class="toolbar-tabs">
-          <button class="toolbar-tab active">Stay view</button>
-          <button class="toolbar-tab">Room view</button>
-          <button class="toolbar-tab">Quick view</button>
-        </div>
-        <div class="toolbar-search">Search rooms / guests / floors</div>
-      </div>
-
-      <div class="rack-board">
-        <div v-for="row in groupedRackRows" :key="row.floor" class="rack-row">
-          <div class="rack-floor">{{ row.floor }}</div>
-          <div class="rack-cells">
-            <div
-              v-for="cell in row.cells"
-              :key="cell.no"
-              class="rack-cell"
-              :class="cell.status"
-            >
-              <div class="rack-cell-head">
-                <strong>{{ cell.no }}</strong>
-                <span>{{ cell.flag }}</span>
-              </div>
-              <p>{{ cell.guest }}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </article>
-
-    <article class="panel-card panel-dense">
-      <div class="panel-head panel-head-tight">
-        <div>
-          <p class="eyebrow-dark">Housekeeping</p>
-          <h3>Turnaround queue</h3>
-        </div>
-        <span class="status-badge warning">{{ housekeepingQueue.length }} rooms pending</span>
-      </div>
-
-      <div class="table-scroll">
-        <table v-smart-table class="data-table room-master-table">
-          <thead>
-            <tr>
-              <th>Room</th>
-              <th>Task</th>
-              <th>ETA</th>
-              <th>Owner</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in housekeepingQueue" :key="item.id">
-              <td><strong>{{ item.room }}</strong></td>
-              <td>{{ item.task }}</td>
-              <td>{{ item.eta }}</td>
-              <td>{{ item.owner }}</td>
-              <td>{{ item.status }}</td>
-              <td>
-                <div class="modal-actions">
-                  <button v-if="item.canStart" class="action-button" @click="updateHousekeepingTask(item, 'in_progress')">Start</button>
-                  <button v-if="item.canComplete" class="action-button primary" @click="updateHousekeepingTask(item, 'done')">Done</button>
-                </div>
-              </td>
-            </tr>
-            <tr v-if="!housekeepingQueue.length">
-              <td colspan="6" class="table-empty-cell">There are no rooms requiring housekeeping follow-up right now.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </article>
-  </section>
-
   <section class="panel-card panel-dense">
     <div class="panel-head panel-head-tight">
       <div>
-        <p class="eyebrow-dark">Room notes</p>
-        <h3>Room and housekeeping status</h3>
+        <p class="eyebrow-dark">Housekeeping</p>
+        <h3>Turnaround queue</h3>
       </div>
       <div class="kpi-inline">
-        <span>{{ housekeepingQueue.length }} rooms in turnaround</span>
-        <span>{{ filteredRoomMasters.filter((room) => ['Blocked', 'Maintenance'].includes(String(room.status ?? ''))).length }} rooms blocked / maintenance</span>
+        <span>{{ housekeepingQueue.length }} task</span>
       </div>
     </div>
 
-    <div class="room-grid">
-      <article v-for="room in filteredRoomMasters" :key="room.code" class="room-card">
-        <div class="split-row">
-          <div>
-            <strong>Room {{ room.code }}</strong>
-            <p class="subtle">{{ room.name }}</p>
-          </div>
-          <span class="status-dot" :class="room.status"></span>
-        </div>
-        <p class="subtle">{{ room.type }}</p>
-        <p class="subtle">Receivable COA: {{ room.coaReceivable }}</p>
-        <p class="subtle">Revenue COA: {{ room.coaRevenue }}</p>
-        <div class="split-row" style="margin-top: 14px;">
-          <span>{{ room.hk }}</span>
-          <span>{{ room.note }}</span>
-        </div>
-      </article>
+    <div class="table-scroll">
+      <table v-smart-table class="data-table room-master-table">
+        <thead>
+          <tr>
+            <th>Room</th>
+            <th>Task</th>
+            <th>Status</th>
+            <th>Priority</th>
+            <th>Team</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-if="!housekeepingQueue.length">
+            <td colspan="6">Tidak ada task housekeeping aktif.</td>
+          </tr>
+          <tr v-for="item in housekeepingQueue" :key="item.id">
+            <td><strong>{{ item.room }}</strong></td>
+            <td>{{ item.task }}</td>
+            <td>{{ item.status }}</td>
+            <td>{{ item.priority }}</td>
+            <td>{{ item.owner }}</td>
+            <td>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button
+                  v-if="item.canStart"
+                  class="action-button"
+                  @click="updateHousekeepingTask(item, 'in_progress')"
+                >
+                  Start cleaning
+                </button>
+                <button
+                  v-if="item.canComplete"
+                  class="action-button primary"
+                  @click="updateHousekeepingTask(item, 'done')"
+                >
+                  Mark available
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </section>
 
@@ -434,7 +325,7 @@ onMounted(async () => {
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">Room master</p>
-          <h3>{{ editingCode ? `Edit room ${editingCode}` : 'Add room master' }}</h3>
+          <h3>{{ editingCode ? `Edit room ${editingCode}` : 'Fixed room setup' }}</h3>
         </div>
         <button class="action-button" @click="closeRoomModal()">Close</button>
       </div>
@@ -446,7 +337,7 @@ onMounted(async () => {
             v-model="roomForm.code"
             class="form-control"
             :disabled="Boolean(editingCode)"
-            placeholder="Example: 301"
+            placeholder="Example: 1"
           />
         </label>
 
@@ -455,16 +346,8 @@ onMounted(async () => {
           <input
             v-model="roomForm.name"
             class="form-control"
-            placeholder="Example: Deluxe Garden 301"
+            placeholder="Example: Kamar 1"
           />
-        </label>
-
-        <label class="field-stack">
-          <span>Room type</span>
-          <select v-model="roomForm.roomTypeId" class="form-control">
-            <option value="">Select room type</option>
-            <option v-for="item in roomTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
         </label>
 
         <label class="field-stack field-span-2">
@@ -490,13 +373,13 @@ onMounted(async () => {
 
       <div class="booking-inline-summary">
         <div class="note-cell">
-          <strong>Edit mode</strong>
+          <strong>Setup properti</strong>
           <p class="subtle">
             <template v-if="editingCode">
-              You are editing room master {{ editingCode }}. The room code is locked to keep booking references safe.
+              Anda sedang mengubah kamar {{ editingCode }} dalam setup 8 kamar tetap. Kode kamar dikunci agar relasi booking tetap aman.
             </template>
             <template v-else>
-              Create a new room with a unique code, choose a room type, then connect the matching receivable and revenue COA.
+              Properti ini memakai model tanpa kelas kamar, jadi fokusnya hanya pada 8 kamar operasional yang sudah disiapkan.
             </template>
           </p>
         </div>

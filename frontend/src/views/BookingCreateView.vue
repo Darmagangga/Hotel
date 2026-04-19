@@ -28,6 +28,13 @@ const toIsoDate = (date) => {
   const day = String(date.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
+const todayDateKey = () => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 const addDateKeyDays = (value, days) => {
   const date = toUtcDate(value)
   date.setUTCDate(date.getUTCDate() + days)
@@ -101,6 +108,9 @@ const formatBookingRate = (value) => {
 }
 const businessDateKey = computed(() => toDateKey(hotel.currentBusinessDate) || toIsoDate(new Date()))
 const nextBusinessDateKey = computed(() => addDateKeyDays(businessDateKey.value, 1))
+const effectiveMinBookingDateKey = computed(() =>
+  businessDateKey.value > todayDateKey() ? businessDateKey.value : todayDateKey(),
+)
 
 const bookingResult = ref({ tone: '', text: '' })
 const saving = ref(false)
@@ -149,9 +159,9 @@ const submitLabel = computed(() => {
   return isEditMode.value ? 'Update reservation' : 'Save reservation'
 })
 
-const bookingMinDate = computed(() => `${businessDateKey.value} 00:00`)
+const bookingMinDate = computed(() => `${effectiveMinBookingDateKey.value} 00:00`)
 const bookingMinCheckOut = computed(() => {
-  const currentDateKey = toDateKey(bookingForm.checkIn) || businessDateKey.value
+  const currentDateKey = toDateKey(bookingForm.checkIn) || effectiveMinBookingDateKey.value
   const nextDateKey = addDateKeyDays(currentDateKey, 1)
   return `${nextDateKey} 12:00`
 })
@@ -185,7 +195,7 @@ const availableRooms = computed(() => {
       .filter((room) => !occupiedRoomCodes.has(String(room.code)))
       .map((room) => ({
         room: room.code,
-        roomType: room.type,
+        roomName: String(room.name ?? '').trim(),
         flag: String(room.status ?? '').slice(0, 2).toUpperCase() || 'AV',
         hk: room.note || room.status || 'Available',
         rate: Number(room.rate ?? 0),
@@ -210,12 +220,22 @@ const roomOptionsForIndex = (index) => {
     )
     .map((item) => ({
       value: item.room,
-      label: `${item.room} | ${item.roomType}`,
+      label: item.roomName || item.room,
     }))
 }
 
 const roomSelectionInfo = (index) =>
   availableRooms.value.find((item) => item.room === bookingForm.roomSelections[index]?.room) ?? null
+
+const roomDisplayName = (roomCode) => {
+  const roomInfo = availableRooms.value.find((item) => item.room === roomCode)
+
+  if (!roomInfo) {
+    return roomCode
+  }
+
+  return roomInfo.roomName || roomInfo.room
+}
 
 const normalizedRoomDetails = computed(() =>
   bookingForm.roomSelections
@@ -271,7 +291,7 @@ const estimatedSummary = computed(() => {
 
   return {
     roomCount: selectedRoomItems.length,
-    roomTypes: [...new Set(selectedRoomItems.map((item) => item.roomType))],
+    rooms: selectedRoomItems.map((item) => roomDisplayName(item.room)),
     totalValue,
     total: new Intl.NumberFormat('id-ID', {
       style: 'currency',
@@ -726,7 +746,7 @@ onMounted(async () => {
           <div>
             <p class="eyebrow-dark">Room assignment</p>
           </div>
-          <span class="status-badge warning">{{ availableRooms.length }} rooms from room table</span>
+          <span class="status-badge warning">{{ availableRooms.length }} kamar aktif</span>
         </div>
 
         <div class="booking-room-table-head">
@@ -868,8 +888,8 @@ onMounted(async () => {
             <p class="subtle">{{ estimatedSummary.total }}</p>
           </div>
           <div class="list-row list-row-tight">
-            <strong>Room type mix</strong>
-            <p class="subtle">{{ estimatedSummary.roomTypes.join(', ') }}</p>
+            <strong>Selected rooms</strong>
+            <p class="subtle">Kamar {{ estimatedSummary.rooms.join(', ') }}</p>
           </div>
           <div class="list-row list-row-tight">
             <strong>Nights</strong>

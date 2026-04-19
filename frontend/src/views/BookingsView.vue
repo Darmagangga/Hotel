@@ -1,11 +1,14 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import DateTimePickerField from '../components/DateTimePickerField.vue'
 import LoadingState from '../components/LoadingState.vue'
 import Select2Field from '../components/Select2Field.vue'
 import StayViewCalendar from '../components/StayViewCalendar.vue'
 import api from '../services/api'
 import { useHotelStore } from '../stores/hotel'
+import { encodeInvoicePrintOverrides } from '../utils/invoicePrintOverrides'
+import { loadPrintTemplateSettings, PRINT_TEMPLATE_UPDATED_EVENT } from '../utils/printTemplate'
 
 const router = useRouter()
 const hotel = useHotelStore()
@@ -22,6 +25,8 @@ const toIsoDate = (date) => {
   const day = String(date.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
+
+const todayDateKey = () => toIsoDate(new Date())
 
 const addDays = (value, days) => {
   const date = toUtcDate(value)
@@ -67,10 +72,12 @@ const formatShortStayDate = (value) => {
 
 const firstDateKey = hotel.calendarDates[0].key
 const secondDateKey = hotel.calendarDates[1].key
-const visibleCalendarStart = ref(firstDateKey)
+const visibleCalendarStart = ref(todayDateKey())
 
 const bookingSearch = ref('')
 const bookingStatus = ref('All')
+const bookingDateStart = ref('')
+const bookingDateEnd = ref('')
 const loadingBookings = ref(false)
 const loadingRooms = ref(false)
 const bookingsResult = ref({ tone: '', text: '' })
@@ -84,8 +91,13 @@ const showAddonModal = ref(false)
 const showAddonListModal = ref(false)
 const showInvoiceModal = ref(false)
 const invoiceDocumentMode = ref('invoice')
+const printTemplate = ref(loadPrintTemplateSettings())
+const invoicePrintDraft = ref(null)
+const invoiceHtmlPreviewUrl = ref('')
 const showPaymentModal = ref(false)
 const showStatusConfirmModal = ref(false)
+const loadingCheckoutInventory = ref(false)
+const checkoutInventoryRows = ref([])
 const statusConfirmState = ref({
   bookingCode: '',
   guest: '',
@@ -178,20 +190,22 @@ const invoicePreview = computed(() => {
     .filter((item) => item.bookingCode === booking.code)
     .sort((left, right) => right.paymentDate.localeCompare(left.paymentDate))
   const addonTotalValue = addons.reduce((total, item) => total + Number(item.totalPriceValue ?? 0), 0)
-  const roomTotalValue = Math.max(Number(booking.grandTotalValue ?? 0) - addonTotalValue, 0)
+  const roomOnlySubtotalValue = Math.max(Number(booking.amountValue ?? 0), 0)
   const roomDetails = Array.isArray(booking.roomDetails) ? booking.roomDetails : []
   const roomCount = roomDetails.length || Math.max(1, Number(booking.roomCount ?? 1))
+  const perRoomDefault = roomCount > 0 ? Math.round(roomOnlySubtotalValue / roomCount) : roomOnlySubtotalValue
 
   const roomLines = roomDetails.length
     ? roomDetails.map((room, index) => {
         const rateValue = Number(room.rate ?? room.rateValue ?? 0)
-        const totalValue = rateValue > 0 ? rateValue * nights : Math.round(roomTotalValue / roomCount)
+        const totalValue = rateValue > 0 ? rateValue * nights : perRoomDefault
         return {
           id: `${booking.code}-room-${room.room}-${index}`,
           room: room.room,
           roomType: room.roomType,
           pax: `${Number(room.adults ?? 0)} adult(s), ${Number(room.children ?? 0)} child(ren)`,
           nights,
+          totalValue,
           rateLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(rateValue > 0 ? rateValue : Math.round(totalValue / nights)),
           totalLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(totalValue),
         }
@@ -202,9 +216,12 @@ const invoicePreview = computed(() => {
         roomType: booking.roomType || '-',
         pax: `${Number(booking.adults ?? 0)} adult(s), ${Number(booking.children ?? 0)} child(ren)`,
         nights,
-        rateLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Math.round(roomTotalValue / nights)),
-        totalLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(roomTotalValue),
+        totalValue: roomOnlySubtotalValue,
+        rateLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Math.round(roomOnlySubtotalValue / nights)),
+        totalLabel: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(roomOnlySubtotalValue),
       }]
+
+  const roomTotalValue = roomLines.reduce((total, room) => total + Number(room.totalValue ?? 0), 0)
 
   return {
     bookingCode: booking.code,
@@ -218,7 +235,7 @@ const invoicePreview = computed(() => {
     roomLabel: booking.room,
     roomCount: booking.roomCount,
     roomLines,
-    roomTotal: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(roomTotalValue),
+    roomTotal: new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(roomOnlySubtotalValue || roomTotalValue),
     addonLines: addons.map((item) => ({
       id: item.id,
       label: item.addonLabel,
@@ -245,6 +262,58 @@ const invoicePreview = computed(() => {
   }
 })
 
+const createInvoicePrintDraft = () => {
+  const booking = selectedBooking.value
+  const preview = invoicePreview.value
+  if (!booking || !preview) {
+    return null
+  }
+
+  return {
+    invoice: {
+      invoice_number: preview.invoiceNo,
+      issued_at: preview.issueDate,
+      due_at: preview.dueDate,
+      status: preview.paymentStatus,
+    },
+    booking: {
+      code: booking.code,
+      guest: booking.guest,
+      checkIn: booking.checkIn,
+      checkOut: booking.checkOut,
+      note: booking.note || '',
+      invoiceStatus: preview.paymentStatus,
+      roomDetails: preview.roomLines.map((room, index) => ({
+        room: room.room,
+        roomType: room.roomType,
+        adults: Number(booking.roomDetails?.[index]?.adults ?? booking.adults ?? 0),
+        children: Number(booking.roomDetails?.[index]?.children ?? booking.children ?? 0),
+        rateValue: Math.round(Number(room.totalValue ?? 0) / Math.max(1, Number(room.nights ?? 1))),
+        lineTotalValue: Number(room.totalValue ?? 0),
+      })),
+      addons: (Array.isArray(booking.addons) ? booking.addons : []).map((item) => ({
+        addonLabel: item.addonLabel,
+        serviceName: item.serviceName,
+        serviceDateLabel: item.serviceDateLabel ?? item.serviceDate ?? '-',
+        quantity: Number(item.quantity ?? 1),
+        unitPriceValue: Number(item.unitPriceValue ?? 0),
+        totalPriceValue: Number(item.totalPriceValue ?? 0),
+      })),
+      payments: preview.payments.map((payment) => ({
+        paymentDate: payment.date,
+        transactionLabel: payment.type,
+        method: payment.method,
+        referenceNo: payment.reference,
+        signedAmountValue: Number(String(payment.amountLabel).replace(/[^0-9-]/g, '')) || 0,
+      })),
+    },
+    document: {
+      invoiceTitle: 'INVOICE',
+      addonFooterNote: 'Please review this invoice carefully. Payments are considered settled after confirmed receipt.',
+    },
+  }
+}
+
 watch(selectedBookingCode, (bookingCode) => {
   hotel.setSelectedBooking(bookingCode || null)
 })
@@ -255,6 +324,16 @@ watch(
     const normalizedCode = bookingCode ?? ''
     if (normalizedCode !== selectedBookingCode.value) {
       selectedBookingCode.value = normalizedCode
+    }
+  },
+)
+
+watch(
+  () => hotel.currentBusinessDate,
+  () => {
+    const todayKey = todayDateKey()
+    if (todayKey) {
+      visibleCalendarStart.value = todayKey
     }
   },
 )
@@ -272,16 +351,31 @@ watch(selectedBooking, (booking) => {
   showStatusConfirmModal.value = false
 })
 
+watch(
+  () => [selectedBookingCode.value, showInvoiceModal.value, invoiceDocumentMode.value],
+  () => {
+    if (!showInvoiceModal.value || invoiceDocumentMode.value !== 'invoice') {
+      return
+    }
+
+    invoicePrintDraft.value = createInvoicePrintDraft()
+    refreshInvoiceHtmlPreview()
+  },
+)
+
 const filteredBookings = computed(() => {
   const query = bookingSearch.value.trim().toLowerCase()
 
   return bookings.value.filter((item) => {
     const matchesStatus = bookingStatus.value === 'All' || item.status === bookingStatus.value
+    const itemCheckIn = String(item.checkIn ?? '').slice(0, 10)
+    const matchesStart = !bookingDateStart.value || itemCheckIn >= bookingDateStart.value
+    const matchesEnd = !bookingDateEnd.value || itemCheckIn <= bookingDateEnd.value
     const haystack = [item.code, item.guest, item.room, item.roomType, item.channel]
       .join(' ')
       .toLowerCase()
 
-    return matchesStatus && (!query || haystack.includes(query))
+    return matchesStatus && matchesStart && matchesEnd && (!query || haystack.includes(query))
   })
 })
 
@@ -313,25 +407,25 @@ const buildBookingStatusTone = (booking) => {
 }
 
 const stayCalendarGroups = computed(() => {
+  const roomGroupKey = 'Kamar'
   const roomTypeMap = new Map()
   const dateKeys = calendarDates.value.map((day) => day.key)
 
   roomRows.value.forEach((room) => {
-    const roomType = room.type || 'Unassigned'
-    if (!roomTypeMap.has(roomType)) {
-      roomTypeMap.set(roomType, {
-        roomType,
+    if (!roomTypeMap.has(roomGroupKey)) {
+      roomTypeMap.set(roomGroupKey, {
+        roomType: roomGroupKey,
         plan: '',
         availability: '',
         unassigned: 0,
-        rate: Number(room.rate ?? 0),
+        rate: 0,
         rooms: [],
       })
     }
 
-    roomTypeMap.get(roomType).rooms.push({
+    roomTypeMap.get(roomGroupKey).rooms.push({
       no: room.code,
-      hk: room.note || room.status || 'Available',
+      hk: room.hk || room.status || 'Available',
       flag: String(room.status ?? '').slice(0, 2).toUpperCase() || 'AV',
       bookings: [],
     })
@@ -344,7 +438,7 @@ const stayCalendarGroups = computed(() => {
     const endIndex = dateKeys.findIndex((key) => key === endKey)
 
     booking.roomDetails?.forEach((detail) => {
-      const group = roomTypeMap.get(detail.roomType || 'Unassigned')
+      const group = roomTypeMap.get(roomGroupKey)
       const room = group?.rooms.find((item) => item.no === detail.room)
 
       if (!group || !room) {
@@ -426,59 +520,66 @@ const staySummary = computed(() => {
 })
 
 const addonStatusOptions = ['Planned', 'Confirmed', 'Posted']
+const addonStatusSelectOptions = addonStatusOptions.map((item) => ({ value: item, label: item }))
+const formatAddonOptionPrice = (value) => formatCurrency(value ?? 0)
 
 const getAddonItemOptions = (addonType) => {
   if (addonType === 'transport') {
     return (hotel.transportRates ?? []).flatMap((item) => ([
       {
-        value: `${item.id}:pickup`,
-        label: `${item.driver} | Pickup | ${item.pickupPrice}`,
+        value: `${item.dbId ?? item.id}:pickup`,
+        label: `${item.driver} | Pickup | Harga Customer ${formatAddonOptionPrice(item.pickupPriceValue)}`,
         serviceName: `${item.driver} | Pickup`,
         unitPriceValue: item.pickupPriceValue,
+        vendorUnitPriceValue: item.vendorPickupPriceValue ?? 0,
         addonLabel: 'Airport pickup',
-        itemRef: item.id,
+        itemRef: item.dbId ?? item.id,
       },
       {
-        value: `${item.id}:dropoff`,
-        label: `${item.driver} | Drop off | ${item.dropOffPrice}`,
+        value: `${item.dbId ?? item.id}:dropoff`,
+        label: `${item.driver} | Drop off | Harga Customer ${formatAddonOptionPrice(item.dropOffPriceValue)}`,
         serviceName: `${item.driver} | Drop off`,
         unitPriceValue: item.dropOffPriceValue,
+        vendorUnitPriceValue: item.vendorDropOffPriceValue ?? 0,
         addonLabel: 'Airport drop off',
-        itemRef: item.id,
+        itemRef: item.dbId ?? item.id,
       },
     ]))
   }
 
   if (addonType === 'scooter') {
-    return (hotel.scooterBookings ?? []).map((item) => ({
-      value: item.id,
-      label: `${item.scooterType} | ${item.vendor} | ${item.price}`,
+    return (hotel.scooterBookings ?? []).filter((item) => item.isActive !== false).map((item) => ({
+      value: item.dbId ?? item.id,
+      label: `${item.scooterType} | ${item.vendor} | Harga Customer ${formatAddonOptionPrice(item.customerPriceValue ?? item.priceValue)}`,
       serviceName: `${item.scooterType} | ${item.vendor}`,
-      unitPriceValue: item.priceValue,
+      unitPriceValue: item.customerPriceValue ?? item.priceValue,
+      vendorUnitPriceValue: item.vendorPriceValue ?? 0,
       addonLabel: 'Scooter rental',
-      itemRef: item.id,
+      itemRef: item.dbId ?? item.id,
     }))
   }
 
   if (addonType === 'island_tour') {
-    return (hotel.islandTours ?? []).map((item) => ({
-      value: item.id,
-      label: `${item.destination} | ${item.driver} | ${item.cost}`,
+    return (hotel.islandTours ?? []).filter((item) => item.isActive !== false).map((item) => ({
+      value: item.dbId ?? item.id,
+      label: `${item.destination} | ${item.driver} | Harga Customer ${formatAddonOptionPrice(item.customerPriceValue ?? item.costValue)}`,
       serviceName: `${item.destination} | ${item.driver}`,
-      unitPriceValue: item.costValue,
+      unitPriceValue: item.customerPriceValue ?? item.costValue,
+      vendorUnitPriceValue: item.vendorPriceValue ?? 0,
       addonLabel: 'Island tour',
-      itemRef: item.id,
+      itemRef: item.dbId ?? item.id,
     }))
   }
 
   if (addonType === 'boat_ticket') {
-    return (hotel.boatTickets ?? []).map((item) => ({
-      value: item.id,
-      label: `${item.company} | ${item.destination} | ${item.price}`,
+    return (hotel.boatTickets ?? []).filter((item) => item.isActive !== false).map((item) => ({
+      value: item.dbId ?? item.id,
+      label: `${item.company} | ${item.destination} | Harga Customer ${formatAddonOptionPrice(item.customerPriceValue ?? item.priceValue)}`,
       serviceName: `${item.company} | ${item.destination}`,
-      unitPriceValue: item.priceValue,
+      unitPriceValue: item.customerPriceValue ?? item.priceValue,
+      vendorUnitPriceValue: item.vendorPriceValue ?? 0,
       addonLabel: 'Boat ticket',
-      itemRef: item.id,
+      itemRef: item.dbId ?? item.id,
     }))
   }
 
@@ -493,10 +594,26 @@ const getAddonItemCountLabel = (entry) =>
 
 const isScooterAddon = (entry) => entry.addonType === 'scooter'
 
+const getAddonQuantity = (entry) => {
+  if (!isScooterAddon(entry)) {
+    return 1
+  }
+
+  const startDate = String(entry.serviceDate ?? entry.startDate ?? '').trim()
+  const endDate = String(entry.endDate ?? '').trim()
+
+  if (!startDate || !endDate) {
+    return 1
+  }
+
+  const duration = Math.round((toUtcDate(endDate) - toUtcDate(startDate)) / MS_PER_DAY) + 1
+  return Math.max(1, duration)
+}
+
 const addonPreviewTotal = computed(() => {
   const total = addonEntries.value.reduce((sum, entry) => {
     const selectedItem = getAddonItemOptions(entry.addonType).find((item) => item.value === entry.itemValue)
-    return sum + Number(selectedItem?.unitPriceValue ?? 0)
+    return sum + (Number(selectedItem?.unitPriceValue ?? 0) * getAddonQuantity(entry))
   }, 0)
 
   if (!total) {
@@ -593,6 +710,36 @@ const loadRooms = async () => {
   }
 }
 
+const loadAddonCatalog = async () => {
+  try {
+    const [catalogResponse, transportResponse] = await Promise.all([
+      api.get('/activity-catalog'),
+      api.get('/transport-rates'),
+    ])
+
+    const catalog = catalogResponse.data?.data ?? {}
+    hotel.setActivityCatalog({
+      scooters: Array.isArray(catalog.scooters) ? catalog.scooters : [],
+      operators: Array.isArray(catalog.operators) ? catalog.operators : [],
+      islandTours: Array.isArray(catalog.islandTours) ? catalog.islandTours : [],
+      boatTickets: Array.isArray(catalog.boatTickets) ? catalog.boatTickets : [],
+    })
+    hotel.setTransportRates(Array.isArray(transportResponse.data?.data) ? transportResponse.data.data : [])
+  } catch (error) {
+    hotel.setActivityCatalog({
+      scooters: [],
+      operators: [],
+      islandTours: [],
+      boatTickets: [],
+    })
+    hotel.setTransportRates([])
+    bookingsResult.value = {
+      tone: 'error',
+      text: error?.response?.data?.message || error?.message || 'Failed to load add-on catalog data.',
+    }
+  }
+}
+
 const selectBooking = (bookingCode) => {
   selectedBookingCode.value = bookingCode
 }
@@ -629,10 +776,13 @@ const openInvoicePreview = async (bookingCode = '') => {
 
   invoiceDocumentMode.value = 'invoice'
   showInvoiceModal.value = true
+  invoicePrintDraft.value = createInvoicePrintDraft()
+  refreshInvoiceHtmlPreview()
 }
 
 const closeInvoiceModal = () => {
   showInvoiceModal.value = false
+  invoiceHtmlPreviewUrl.value = ''
 }
 
 const buildInvoicePreviewPdfUrl = (bookingCode, inline = false) => {
@@ -647,8 +797,45 @@ const buildInvoicePreviewPdfUrl = (bookingCode, inline = false) => {
   if (token) {
     params.set('token', token)
   }
+  if (invoiceDocumentMode.value === 'invoice' && invoicePrintDraft.value) {
+    const encodedOverrides = encodeInvoicePrintOverrides(invoicePrintDraft.value)
+    if (encodedOverrides) {
+      params.set('overrides', encodedOverrides)
+    }
+  }
   const query = params.toString()
   return `${baseUrl}/bookings/${bookingCode}/invoice-pdf${query ? `?${query}` : ''}`
+}
+
+const buildInvoiceHtmlPreviewUrl = (bookingCode) => {
+  const token = localStorage.getItem('pms_token') || ''
+  const baseUrl = String(api.defaults.baseURL || '').replace(/\/+$/, '')
+  const params = new URLSearchParams()
+  if (token) {
+    params.set('token', token)
+  }
+  if (invoicePrintDraft.value) {
+    const encodedOverrides = encodeInvoicePrintOverrides(invoicePrintDraft.value)
+    if (encodedOverrides) {
+      params.set('overrides', encodedOverrides)
+    }
+  }
+  const query = params.toString()
+  return `${baseUrl}/bookings/${bookingCode}/invoice-print${query ? `?${query}` : ''}`
+}
+
+const refreshInvoiceHtmlPreview = () => {
+  if (!selectedBooking.value || invoiceDocumentMode.value !== 'invoice') {
+    invoiceHtmlPreviewUrl.value = ''
+    return
+  }
+
+  invoiceHtmlPreviewUrl.value = buildInvoiceHtmlPreviewUrl(selectedBooking.value.code)
+}
+
+const resetInvoicePrintDraft = () => {
+  invoicePrintDraft.value = createInvoicePrintDraft()
+  refreshInvoiceHtmlPreview()
 }
 
 const downloadInvoicePreviewPdf = async () => {
@@ -656,8 +843,16 @@ const downloadInvoicePreviewPdf = async () => {
     return
   }
 
+  const params = { size: 'A5', document: invoiceDocumentMode.value }
+  if (invoiceDocumentMode.value === 'invoice' && invoicePrintDraft.value) {
+    const encodedOverrides = encodeInvoicePrintOverrides(invoicePrintDraft.value)
+    if (encodedOverrides) {
+      params.overrides = encodedOverrides
+    }
+  }
+
   const response = await api.get(`/bookings/${selectedBooking.value.code}/invoice-pdf`, {
-    params: { size: 'A5', document: invoiceDocumentMode.value },
+    params,
     responseType: 'blob',
   })
   const blob = new Blob([response.data], { type: 'application/pdf' })
@@ -739,6 +934,8 @@ const openStatusConfirmModal = (state) => {
 
 const closeStatusConfirmModal = () => {
   showStatusConfirmModal.value = false
+  loadingCheckoutInventory.value = false
+  checkoutInventoryRows.value = []
   statusConfirmState.value = {
     bookingCode: '',
     guest: '',
@@ -751,6 +948,18 @@ const closeStatusConfirmModal = () => {
   }
 }
 
+const checkoutInventoryTotalUsed = computed(() =>
+  checkoutInventoryRows.value.reduce((total, row) => total + Number(row.usedQty || 0), 0),
+)
+
+const checkoutInventoryTotalReturned = computed(() =>
+  checkoutInventoryRows.value.reduce((total, row) => total + Math.max(0, Number(row.outstandingQty || 0) - Number(row.usedQty || 0)), 0),
+)
+
+const checkoutInventoryTotalUsedCost = computed(() =>
+  checkoutInventoryRows.value.reduce((total, row) => total + (Number(row.usedQty || 0) * Number(row.latestUnitCost || 0)), 0),
+)
+
 const loadCancellationPolicy = async () => {
   try {
     const response = await api.get('/settings/policies')
@@ -761,11 +970,11 @@ const loadCancellationPolicy = async () => {
   }
 }
 
-const updateBookingStatus = async (bookingCode, status) => {
+const updateBookingStatus = async (bookingCode, status, extraPayload = {}) => {
   bookingsResult.value = { tone: '', text: '' }
 
   try {
-    const response = await api.patch(`/bookings/${bookingCode}/status`, { status })
+    const response = await api.patch(`/bookings/${bookingCode}/status`, { status, ...extraPayload })
     const updatedBooking = response.data?.data
     const message = response.data?.message || 'Booking status was updated successfully.'
 
@@ -781,6 +990,7 @@ const updateBookingStatus = async (bookingCode, status) => {
       tone: 'success',
       text: message,
     }
+    return true
   } catch (error) {
     const errorData = error?.response?.data
     const errorMessage = errorData?.errors?.status?.[0] || errorData?.message || error?.message || 'Failed to update booking status.'
@@ -789,6 +999,7 @@ const updateBookingStatus = async (bookingCode, status) => {
       tone: 'error',
       text: errorMessage,
     }
+    return false
   }
 }
 
@@ -800,8 +1011,20 @@ const submitStatusConfirmation = async () => {
     return
   }
 
-  await updateBookingStatus(bookingCode, nextStatus)
-  closeStatusConfirmModal()
+  const extraPayload = nextStatus === 'Checked-out'
+    ? {
+        roomInventoryUsage: checkoutInventoryRows.value.map((row) => ({
+          roomNo: row.roomNo,
+          itemId: row.itemId,
+          usedQty: Number(row.usedQty || 0),
+        })),
+      }
+    : {}
+
+  const success = await updateBookingStatus(bookingCode, nextStatus, extraPayload)
+  if (success) {
+    closeStatusConfirmModal()
+  }
 }
 
 const checkInBooking = async (bookingCode) => {
@@ -809,7 +1032,41 @@ const checkInBooking = async (bookingCode) => {
 }
 
 const checkOutBooking = async (bookingCode) => {
-  await updateBookingStatus(bookingCode, 'Checked-out')
+  const booking = bookings.value.find((item) => item.code === bookingCode) ?? selectedBooking.value
+  loadingCheckoutInventory.value = true
+  bookingsResult.value = { tone: '', text: '' }
+
+  try {
+    const response = await api.get(`/bookings/${bookingCode}/checkout-inventory`)
+    const rows = Array.isArray(response.data?.data) ? response.data.data : []
+    checkoutInventoryRows.value = rows.map((row) => ({
+      ...row,
+      usedQty: 0,
+    }))
+
+    openStatusConfirmModal({
+      bookingCode,
+      guest: booking?.guest ?? '',
+      nextStatus: 'Checked-out',
+      title: 'Check-out guest',
+      description: rows.length
+        ? 'Masukkan jumlah item kamar yang dipakai tamu. Sisa item akan otomatis dikembalikan ke stok.'
+        : 'Tidak ada item kamar outstanding. Check-out bisa langsung diproses.',
+      penaltyText: '',
+      warningText: rows.length
+        ? 'Qty dipakai akan tetap dianggap keluar dari stok. Qty sisa otomatis kembali ke inventory.'
+        : '',
+      confirmLabel: 'Yes, process check-out',
+    })
+  } catch (error) {
+    const errorData = error?.response?.data
+    bookingsResult.value = {
+      tone: 'error',
+      text: errorData?.message || error?.message || 'Failed to load room inventory usage for check-out.',
+    }
+  } finally {
+    loadingCheckoutInventory.value = false
+  }
 }
 
 const cancelBooking = async (booking) => {
@@ -879,11 +1136,11 @@ const handleAddonTypeChange = (entry) => {
   entry.endDate = entry.endDate < entry.startDate ? entry.startDate : entry.endDate
 }
 
-const handleAddonStartDateChange = (entry) => {
-  entry.serviceDate = entry.startDate
+const handleAddonServiceDateChange = (entry) => {
+  entry.startDate = entry.serviceDate
 
-  if (entry.endDate < entry.startDate) {
-    entry.endDate = entry.startDate
+  if (entry.endDate < entry.serviceDate) {
+    entry.endDate = entry.serviceDate
   }
 }
 
@@ -947,10 +1204,11 @@ const submitAddon = async () => {
         serviceName: selectedItem.serviceName,
         addonLabel: selectedItem.addonLabel,
         serviceDate: entry.serviceDate,
-        startDate: entry.startDate,
+        startDate: entry.serviceDate,
         endDate: entry.endDate,
-        quantity: 1,
+        quantity: getAddonQuantity(entry),
         unitPriceValue: selectedItem.unitPriceValue,
+        vendorUnitPriceValue: selectedItem.vendorUnitPriceValue ?? 0,
         status: entry.status,
         notes: '',
       })
@@ -1127,11 +1385,31 @@ const shiftCalendar = (days) => {
 }
 
 const goCalendarToday = () => {
-  visibleCalendarStart.value = hotel.currentBusinessDate
+  visibleCalendarStart.value = todayDateKey()
 }
 
+const syncPrintTemplate = () => {
+  printTemplate.value = loadPrintTemplateSettings()
+}
+
+onMounted(() => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.addEventListener(PRINT_TEMPLATE_UPDATED_EVENT, syncPrintTemplate)
+})
+
+onBeforeUnmount(() => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.removeEventListener(PRINT_TEMPLATE_UPDATED_EVENT, syncPrintTemplate)
+})
+
 loadRooms()
-Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
+Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy(), loadAddonCatalog()])
 </script>
 
 <template>
@@ -1184,11 +1462,23 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
             {{ item }}
           </button>
         </div>
-        <input
-          v-model="bookingSearch"
-          class="toolbar-search"
-          placeholder="Search booking / guest / room"
-        />
+        <div class="booking-filter-row">
+          <DateTimePickerField
+            v-model="bookingDateStart"
+            :enable-time="false"
+            placeholder="Check-in dari"
+          />
+          <DateTimePickerField
+            v-model="bookingDateEnd"
+            :enable-time="false"
+            placeholder="Check-in sampai"
+          />
+          <input
+            v-model="bookingSearch"
+            class="toolbar-search"
+            placeholder="Search booking / guest / room"
+          />
+        </div>
       </div>
 
       <div v-if="bookingsResult.text" class="booking-feedback" :class="bookingsResult.tone">
@@ -1205,6 +1495,7 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
             <tr>
               <th>Code</th>
               <th>Guest</th>
+              <th>Stay date</th>
               <th>Room</th>
               <th>Source</th>
               <th>Room amount</th>
@@ -1216,7 +1507,7 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
           </thead>
           <tbody>
             <tr v-if="!loadingBookings && !filteredBookings.length">
-              <td colspan="9" class="table-empty-cell">There are no reservations in the database yet.</td>
+              <td colspan="10" class="table-empty-cell">There are no reservations in the database yet.</td>
             </tr>
             <tr
               v-for="item in filteredBookings"
@@ -1227,6 +1518,7 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
             >
               <td><strong>{{ item.code }}</strong></td>
               <td>{{ item.guest }}</td>
+              <td>{{ String(item.checkIn ?? '').slice(0, 10) }} - {{ String(item.checkOut ?? '').slice(0, 10) }}</td>
               <td>{{ item.room }}</td>
               <td>{{ item.channel }}</td>
               <td>{{ item.amount }}</td>
@@ -1247,7 +1539,7 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
   </section>
 
   <div v-if="showAddonModal" class="modal-backdrop" @click.self="closeAddonModal()">
-    <section class="modal-card">
+    <section class="modal-card modal-card-scroll-lock">
       <div class="panel-head panel-head-tight">
         <div>
           <p class="eyebrow-dark">Booking add-on</p>
@@ -1256,7 +1548,8 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
         <button class="action-button" @click="closeAddonModal()">Close</button>
       </div>
 
-      <div class="room-select-stack">
+      <div class="modal-scroll-body">
+        <div class="room-select-stack">
         <div
           v-for="(entry, index) in addonEntries"
           :key="entry.id"
@@ -1274,36 +1567,48 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
             </button>
           </div>
 
-          <div class="booking-form-grid">
-            <label class="field-stack">
-              <span>Add-on type</span>
-              <Select2Field
-                v-model="entry.addonType"
-                :options="addonTypeOptions"
-                :multiple="false"
-                placeholder="Select add-on type"
-                @update:modelValue="handleAddonTypeChange(entry)"
-              />
-            </label>
-
-            <template v-if="isScooterAddon(entry)">
+          <div class="booking-addon-entry-grid">
+            <div class="booking-addon-entry-row" :class="{ 'booking-addon-entry-row-scooter': isScooterAddon(entry) }">
               <label class="field-stack">
-                <span>Service start</span>
-                <input v-model="entry.startDate" class="form-control" type="date" @input="handleAddonStartDateChange(entry)" />
+                <span>Add-on type</span>
+                <Select2Field
+                  v-model="entry.addonType"
+                  :options="addonTypeOptions"
+                  :multiple="false"
+                  placeholder="Select add-on type"
+                  @update:modelValue="handleAddonTypeChange(entry)"
+                />
+              </label>
+
+              <template v-if="isScooterAddon(entry)">
+                <label class="field-stack">
+                  <span>Service date</span>
+                  <input v-model="entry.serviceDate" class="form-control" type="date" @input="handleAddonServiceDateChange(entry)" />
+                </label>
+
+                <label class="field-stack">
+                  <span>Service end</span>
+                  <input v-model="entry.endDate" class="form-control" :min="entry.serviceDate" type="date" />
+                </label>
+              </template>
+
+              <label v-else class="field-stack">
+                <span>Service date</span>
+                <input v-model="entry.serviceDate" class="form-control" type="date" />
               </label>
 
               <label class="field-stack">
-                <span>Service end</span>
-                <input v-model="entry.endDate" class="form-control" :min="entry.startDate" type="date" />
+                <span>Status</span>
+                <Select2Field
+                  v-model="entry.status"
+                  :options="addonStatusSelectOptions"
+                  :multiple="false"
+                  placeholder="Status"
+                />
               </label>
-            </template>
+            </div>
 
-            <label v-else class="field-stack">
-              <span>Service date</span>
-              <input v-model="entry.serviceDate" class="form-control" type="date" />
-            </label>
-
-            <label class="field-stack field-span-2">
+            <label class="field-stack booking-addon-item-field">
               <span>Service item</span>
               <Select2Field
                 v-model="entry.itemValue"
@@ -1313,35 +1618,26 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
               />
               <p class="subtle">{{ getAddonItemCountLabel(entry) }}</p>
             </label>
-
-            <label class="field-stack">
-              <span>Status</span>
-              <Select2Field
-                v-model="entry.status"
-                :options="addonStatusOptions.map((item) => ({ value: item, label: item }))"
-                :multiple="false"
-                placeholder="Status"
-              />
-            </label>
           </div>
         </div>
 
-        <button type="button" class="action-button" @click="addAddonEntry">Add add-on row</button>
-      </div>
-
-      <div class="booking-inline-summary">
-        <div class="note-cell">
-          <strong>Booking target</strong>
-          <p class="subtle">{{ selectedBooking?.guest }} | {{ selectedBooking?.room }}</p>
+          <button type="button" class="action-button" @click="addAddonEntry">Add add-on row</button>
         </div>
-        <div class="note-cell">
-          <strong>Preview total</strong>
-          <p class="subtle">{{ addonPreviewTotal ?? 'Select a service item first' }}</p>
-        </div>
-      </div>
 
-      <div v-if="addonResult.text" class="booking-feedback" :class="addonResult.tone">
-        {{ addonResult.text }}
+        <div class="booking-inline-summary">
+          <div class="note-cell">
+            <strong>Booking target</strong>
+            <p class="subtle">{{ selectedBooking?.guest }} | {{ selectedBooking?.room }}</p>
+          </div>
+          <div class="note-cell">
+            <strong>Preview total</strong>
+            <p class="subtle">{{ addonPreviewTotal ?? 'Select a service item first' }}</p>
+          </div>
+        </div>
+
+        <div v-if="addonResult.text" class="booking-feedback" :class="addonResult.tone">
+          {{ addonResult.text }}
+        </div>
       </div>
 
       <div class="modal-actions">
@@ -1384,7 +1680,7 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
           <div class="booking-room-detail-list">
             <div v-for="room in selectedBooking.roomDetails" :key="room.room" class="booking-room-detail-item">
               <strong>Room {{ room.room }}</strong>
-              <p class="subtle">{{ room.roomType }} | {{ room.adults }} adult(s), {{ room.children }} child(ren)</p>
+              <p class="subtle">{{ room.adults }} adult(s), {{ room.children }} child(ren)</p>
             </div>
           </div>
         </div>
@@ -1438,9 +1734,9 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
       <article class="invoice-print-sheet">
         <header class="invoice-print-header">
           <div class="invoice-brand-block">
-            <p class="eyebrow-dark">Guest folio / invoice</p>
-            <h2>{{ hotel.hotelName }}</h2>
-            <p class="subtle">System-generated guest folio for reservation billing and settlement.</p>
+            <p class="eyebrow-dark">{{ printTemplate.documentLabel }}</p>
+            <h2>{{ printTemplate.documentTitle || hotel.hotelName }}</h2>
+            <p class="subtle">{{ printTemplate.tagline }}</p>
           </div>
           <div class="invoice-print-meta invoice-doc-meta">
             <div>
@@ -1493,7 +1789,6 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
               <thead>
                 <tr>
                   <th>Room</th>
-                  <th>Type</th>
                   <th>Pax</th>
                   <th>Rate</th>
                   <th>Nights</th>
@@ -1503,7 +1798,6 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
               <tbody>
                 <tr v-for="room in invoicePreview.roomLines" :key="room.id">
                   <td><strong>{{ room.room }}</strong></td>
-                  <td>{{ room.roomType }}</td>
                   <td>{{ room.pax }}</td>
                   <td>{{ room.rateLabel }}</td>
                   <td>{{ room.nights }}</td>
@@ -1625,15 +1919,119 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
           Booking note: {{ invoicePreview.note }}
         </p>
 
-        <footer class="invoice-print-footer">
+        <p v-if="false && printTemplate.footerNote" class="subtle invoice-print-note invoice-print-note-footer">
+          {{ printTemplate.footerNote }}
+        </p>
+
+        <footer v-if="false" class="invoice-print-footer">
           <div class="invoice-signature-box">
-            <span>Prepared by</span>
+            <span>{{ printTemplate.preparedByLabel }}</span>
           </div>
           <div class="invoice-signature-box">
-            <span>Guest signature</span>
+            <span>{{ printTemplate.approvalLabel }}</span>
           </div>
         </footer>
       </article>
+
+      <section v-if="false && invoicePrintDraft" class="invoice-editor-shell">
+        <article class="panel-card panel-dense invoice-editor-panel">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">TCPDF editor</p>
+              <h3>Manual invoice override</h3>
+              <p class="panel-note">Field di bawah akan dipakai oleh preview backend dan PDF TCPDF.</p>
+            </div>
+          </div>
+
+          <div class="settings-designer-grid">
+            <label class="field-stack">
+              <span>Document title</span>
+              <input v-model="invoicePrintDraft.document.invoiceTitle" class="form-control" type="text" />
+            </label>
+            <label class="field-stack">
+              <span>Invoice number</span>
+              <input v-model="invoicePrintDraft.invoice.invoice_number" class="form-control" type="text" />
+            </label>
+            <label class="field-stack">
+              <span>Invoice date</span>
+              <input v-model="invoicePrintDraft.invoice.issued_at" class="form-control" type="date" />
+            </label>
+            <label class="field-stack">
+              <span>Due date</span>
+              <input v-model="invoicePrintDraft.invoice.due_at" class="form-control" type="date" />
+            </label>
+            <label class="field-stack">
+              <span>Status</span>
+              <input v-model="invoicePrintDraft.invoice.status" class="form-control" type="text" />
+            </label>
+            <label class="field-stack">
+              <span>Guest</span>
+              <input v-model="invoicePrintDraft.booking.guest" class="form-control" type="text" />
+            </label>
+            <label class="field-stack">
+              <span>Check-in</span>
+              <input v-model="invoicePrintDraft.booking.checkIn" class="form-control" type="date" />
+            </label>
+            <label class="field-stack">
+              <span>Check-out</span>
+              <input v-model="invoicePrintDraft.booking.checkOut" class="form-control" type="date" />
+            </label>
+            <label class="field-stack field-span-2">
+              <span>Footer note</span>
+              <textarea v-model="invoicePrintDraft.document.addonFooterNote" class="form-control form-textarea"></textarea>
+            </label>
+          </div>
+
+          <div class="compact-list">
+            <div class="list-row list-row-tight invoice-editor-listhead">
+              <strong>Room rows</strong>
+              <span class="subtle">Ubah kamar, tipe, rate, dan total secara manual.</span>
+            </div>
+            <div v-for="(room, index) in invoicePrintDraft.booking.roomDetails" :key="`room-${index}`" class="invoice-editor-grid">
+              <input v-model="room.room" class="form-control" type="text" placeholder="Room" />
+              <input v-model="room.roomType" class="form-control" type="text" placeholder="Room type" />
+              <input v-model.number="room.rateValue" class="form-control" type="number" min="0" step="1" placeholder="Rate" />
+              <input v-model.number="room.lineTotalValue" class="form-control" type="number" min="0" step="1" placeholder="Total" />
+            </div>
+          </div>
+
+          <div class="compact-list" style="margin-top: 12px;">
+            <div class="list-row list-row-tight invoice-editor-listhead">
+              <strong>Add-on rows</strong>
+              <span class="subtle">Jumlah dan nominal add-on bisa dioverride.</span>
+            </div>
+            <div v-for="(addon, index) in invoicePrintDraft.booking.addons" :key="`addon-${index}`" class="invoice-editor-grid invoice-editor-grid-addon">
+              <input v-model="addon.addonLabel" class="form-control" type="text" placeholder="Item" />
+              <input v-model="addon.serviceName" class="form-control" type="text" placeholder="Service" />
+              <input v-model="addon.serviceDateLabel" class="form-control" type="text" placeholder="Service date" />
+              <input v-model.number="addon.quantity" class="form-control" type="number" min="0" step="1" placeholder="Qty" />
+              <input v-model.number="addon.totalPriceValue" class="form-control" type="number" min="0" step="1" placeholder="Total" />
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button class="action-button" @click="resetInvoicePrintDraft">Reset manual edit</button>
+            <button class="action-button primary" @click="refreshInvoiceHtmlPreview">Refresh TCPDF preview</button>
+          </div>
+        </article>
+
+        <article class="panel-card panel-dense invoice-editor-preview">
+          <div class="panel-head panel-head-tight">
+            <div>
+              <p class="eyebrow-dark">Backend preview</p>
+              <h3>HTML preview from invoice-print</h3>
+            </div>
+          </div>
+
+          <iframe
+            v-if="invoiceHtmlPreviewUrl"
+            :src="invoiceHtmlPreviewUrl"
+            class="invoice-preview-frame"
+            title="Invoice TCPDF preview"
+          ></iframe>
+          <p v-else class="subtle">Preview belum dimuat.</p>
+        </article>
+      </section>
 
           <div class="modal-actions">
             <button class="action-button" @click="closeInvoiceModal()">Back</button>
@@ -1810,6 +2208,75 @@ Promise.all([loadBookings(), loadPayments(), loadCancellationPolicy()])
 
       <div v-if="statusConfirmState.warningText" class="booking-feedback error">
         {{ statusConfirmState.warningText }}
+      </div>
+
+      <div v-if="statusConfirmState.nextStatus === 'Checked-out'">
+        <div v-if="loadingCheckoutInventory" class="booking-feedback">
+          Loading room inventory usage...
+        </div>
+
+        <template v-else-if="checkoutInventoryRows.length">
+          <div class="booking-inline-summary" style="margin-top: 12px;">
+            <div class="note-cell">
+              <strong>Dipakai tamu</strong>
+              <p class="subtle">{{ checkoutInventoryTotalUsed }} item</p>
+            </div>
+            <div class="note-cell">
+              <strong>Kembali ke stok</strong>
+              <p class="subtle">{{ checkoutInventoryTotalReturned }} item</p>
+            </div>
+            <div class="note-cell">
+              <strong>Estimasi biaya pakai</strong>
+              <p class="subtle">{{ formatCurrency(checkoutInventoryTotalUsedCost) }}</p>
+            </div>
+          </div>
+
+          <div class="table-scroll" style="margin-top: 12px;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Room</th>
+                  <th>Item</th>
+                  <th>Assign terakhir</th>
+                  <th>Total assign</th>
+                  <th>Qty sekarang</th>
+                  <th>Dipakai</th>
+                  <th>Kembali</th>
+                  <th>Biaya pakai</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in checkoutInventoryRows" :key="row.id">
+                  <td><strong>{{ row.roomNo }}</strong></td>
+                  <td>{{ row.itemName }}</td>
+                  <td>
+                    {{ row.lastIssueQty }} {{ row.unit }}
+                    <div class="subtle">{{ row.lastIssueDate || '-' }}</div>
+                  </td>
+                  <td>{{ row.totalIssuedQty }} {{ row.unit }}</td>
+                  <td>{{ row.outstandingQty }} {{ row.unit }}</td>
+                  <td style="max-width: 120px;">
+                    <input
+                      v-model="row.usedQty"
+                      class="form-control"
+                      type="number"
+                      min="0"
+                      :max="row.outstandingQty"
+                      step="1"
+                      @input="row.usedQty = Math.max(0, Math.min(Number(row.usedQty || 0), Number(row.outstandingQty || 0)))"
+                    />
+                  </td>
+                  <td>{{ Math.max(0, Number(row.outstandingQty || 0) - Number(row.usedQty || 0)) }} {{ row.unit }}</td>
+                  <td>{{ formatCurrency(Number(row.usedQty || 0) * Number(row.latestUnitCost || 0)) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <div v-else class="booking-feedback success" style="margin-top: 12px;">
+          Tidak ada item kamar yang masih outstanding untuk booking ini.
+        </div>
       </div>
 
       <div class="modal-actions">

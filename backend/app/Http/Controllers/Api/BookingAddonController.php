@@ -27,12 +27,16 @@ class BookingAddonController extends Controller
             'endDate' => ['nullable', 'date'],
             'quantity' => ['nullable', 'integer', 'min:1'],
             'unitPriceValue' => ['required', 'numeric', 'min:0'],
+            'vendorUnitPriceValue' => ['nullable', 'numeric', 'min:0'],
             'status' => ['required', 'string', 'in:Planned,Confirmed,Posted,Cancelled,planned,confirmed,posted,cancelled,completed'],
             'notes' => ['nullable', 'string'],
         ]);
 
-        $quantity = max(1, (int) ($payload['quantity'] ?? 1));
+        $quantity = $this->resolveQuantity($payload);
         $unitPrice = (float) $payload['unitPriceValue'];
+        $vendorUnitPrice = (float) ($payload['vendorUnitPriceValue'] ?? 0);
+        $vendorTotalPrice = $vendorUnitPrice * $quantity;
+        $customerTotalPrice = $unitPrice * $quantity;
         $addon = $booking->bookingAddons()->create([
             'addon_type' => $payload['addonType'],
             'reference_id' => is_numeric($payload['referenceId'] ?? null) ? (int) $payload['referenceId'] : null,
@@ -41,13 +45,17 @@ class BookingAddonController extends Controller
             'end_date' => $payload['endDate'] ?? null,
             'qty' => $quantity,
             'unit_price' => $unitPrice,
-            'total_price' => $unitPrice * $quantity,
+            'total_price' => $customerTotalPrice,
             'status' => $this->normalizeStatus($payload['status']),
             'notes' => json_encode([
                 'note' => $payload['notes'] ?? '',
                 'serviceName' => $payload['serviceName'],
                 'addonLabel' => $payload['addonLabel'],
                 'itemRef' => $payload['referenceId'] ?? '',
+                'vendorUnitPriceValue' => $vendorUnitPrice,
+                'vendorTotalPriceValue' => $vendorTotalPrice,
+                'customerUnitPriceValue' => $unitPrice,
+                'feeTotalValue' => max(0, $customerTotalPrice - $vendorTotalPrice),
             ], JSON_UNESCAPED_UNICODE),
         ]);
 
@@ -146,6 +154,26 @@ class BookingAddonController extends Controller
             'cancelled' => 'cancelled',
             default => 'planned',
         };
+    }
+
+    private function resolveQuantity(array $payload): int
+    {
+        $defaultQuantity = max(1, (int) ($payload['quantity'] ?? 1));
+        $addonType = strtolower(trim((string) ($payload['addonType'] ?? '')));
+
+        if ($addonType !== 'scooter') {
+            return $defaultQuantity;
+        }
+
+        $startDate = trim((string) ($payload['startDate'] ?? $payload['serviceDate'] ?? ''));
+        $endDate = trim((string) ($payload['endDate'] ?? ''));
+
+        if ($startDate === '' || $endDate === '') {
+            return $defaultQuantity;
+        }
+
+        $days = (int) floor((strtotime($endDate) - strtotime($startDate)) / 86400) + 1;
+        return max(1, $days);
     }
 
     private function refreshBookingTotals(Booking $booking): void

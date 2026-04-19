@@ -5,10 +5,13 @@ import BookingsView from '../views/BookingsView.vue'
 import BookingCreateView from '../views/BookingCreateView.vue'
 import RoomsView from '../views/RoomsView.vue'
 import FinanceView from '../views/FinanceView.vue'
+import ActivityVendorsView from '../views/ActivityVendorsView.vue'
+import VendorPayablesView from '../views/VendorPayablesView.vue'
 import JournalView from '../views/JournalView.vue'
 import CoaView from '../views/CoaView.vue'
 import InventoryView from '../views/InventoryView.vue'
 import InventoryPurchasePosView from '../views/InventoryPurchasePosView.vue'
+import UnitMasterView from '../views/UnitMasterView.vue'
 import TransportView from '../views/TransportView.vue'
 import ActivitiesView from '../views/ActivitiesView.vue'
 import ReportsView from '../views/ReportsView.vue'
@@ -42,10 +45,13 @@ const router = createRouter({
     { path: '/bookings/:bookingCode/edit', name: 'booking-edit', component: BookingCreateView, meta: { requiresAuth: true, permission: 'bookings' } },
     { path: '/rooms', name: 'rooms', component: RoomsView, meta: { requiresAuth: true, permission: 'rooms' } },
     { path: '/finance', name: 'finance', component: FinanceView, meta: { requiresAuth: true, permission: 'finance' } },
+    { path: '/activities/vendors', name: 'activity-vendors', component: ActivityVendorsView, meta: { requiresAuth: true, permission: 'activities' } },
+    { path: '/activities/payables', name: 'vendor-payables', component: VendorPayablesView, meta: { requiresAuth: true, permission: 'activities' } },
     { path: '/journals', name: 'journals', component: JournalView, meta: { requiresAuth: true, permission: 'journals' } },
     { path: '/coa', name: 'coa', component: CoaView, meta: { requiresAuth: true, permission: 'coa' } },
     { path: '/inventory', name: 'inventory', component: InventoryView, meta: { requiresAuth: true, permission: 'inventory' } },
     { path: '/inventory/purchases', name: 'inventory-purchases', component: InventoryPurchasePosView, meta: { requiresAuth: true, permission: 'inventory' } },
+    { path: '/master/units', name: 'master-units', component: UnitMasterView, meta: { requiresAuth: true, permission: 'inventory' } },
     { path: '/transport', name: 'transport', component: TransportView, meta: { requiresAuth: true, permission: 'transport' } },
     { path: '/activities', name: 'activities', component: ActivitiesView, meta: { requiresAuth: true, permission: 'activities' } },
     { path: '/reports', name: 'reports', component: ReportsView, meta: { requiresAuth: true, permission: 'reports' } },
@@ -56,7 +62,7 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to) => {
   const hotelStore = useHotelStore()
   const isAuthenticated = !!hotelStore.user
 
@@ -65,22 +71,16 @@ router.beforeEach((to, from, next) => {
   }
 
   if (to.meta.requiresAuth && !hotelStore.user) {
-    next({ name: 'login' })
-    return
+    return { name: 'login' }
   }
 
   if (to.name === 'login' && hotelStore.user) {
-    next({ name: 'dashboard' })
-    return
+    return { name: 'dashboard' }
   }
 
   if (to.meta.requiresAuth && !canAccessRoute(hotelStore.user, to.meta.permission)) {
-    const fallbackRoute = canAccessRoute(hotelStore.user, 'dashboard') ? { name: 'dashboard' } : { name: 'login' }
-    next(fallbackRoute)
-    return
+    return canAccessRoute(hotelStore.user, 'dashboard') ? { name: 'dashboard' } : { name: 'login' }
   }
-
-  next()
 })
 
 export default router

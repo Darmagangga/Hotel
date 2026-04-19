@@ -23,6 +23,13 @@ const toIsoDate = (date) => {
   const day = String(date.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
+const todayDateKey = () => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 const addDateKeyDays = (value, days) => {
   const date = toUtcDate(value)
   date.setUTCDate(date.getUTCDate() + days)
@@ -30,7 +37,8 @@ const addDateKeyDays = (value, days) => {
 }
 const diffDateKeys = (start, end) => Math.round((toUtcDate(end) - toUtcDate(start)) / MS_PER_DAY)
 const firstDateKey = toDateKey(hotel.currentBusinessDate) || toIsoDate(new Date())
-const secondDateKey = addDateKeyDays(firstDateKey, 1)
+const effectiveMinBookingDateKey = firstDateKey > todayDateKey() ? firstDateKey : todayDateKey()
+const secondDateKey = addDateKeyDays(effectiveMinBookingDateKey, 1)
 
 const bookingResult = ref({ tone: '', text: '' })
 const createRoomSelection = () => ({
@@ -41,7 +49,7 @@ const createRoomSelection = () => ({
 
 const bookingForm = reactive({
   guest: '',
-  checkIn: `${firstDateKey} 14:00`,
+  checkIn: `${effectiveMinBookingDateKey} 14:00`,
   checkOut: `${secondDateKey} 12:00`,
   roomSelections: [createRoomSelection()],
   channel: hotel.bookingChannels[0],
@@ -56,10 +64,10 @@ const availableRooms = computed(() =>
   }),
 )
 
-const bookingMinDate = computed(() => `${firstDateKey} 00:00`)
+const bookingMinDate = computed(() => `${effectiveMinBookingDateKey} 00:00`)
 const bookingMinCheckOut = computed(() => {
   const currentDateKey = toDateKey(bookingForm.checkIn)
-  const nextDateKey = addDateKeyDays(currentDateKey || firstDateKey, 1)
+  const nextDateKey = addDateKeyDays(currentDateKey || effectiveMinBookingDateKey, 1)
   return `${nextDateKey} 12:00`
 })
 
@@ -78,7 +86,7 @@ const roomOptionsForIndex = (index) => {
     )
     .map((item) => ({
       value: item.room,
-      label: `Room ${item.room} | ${item.roomType} | ${item.flag} | ${item.hk}`,
+      label: `Room ${item.room} | ${item.flag} | ${item.hk}`,
     }))
 }
 
@@ -290,10 +298,10 @@ const submitBooking = () => {
                   <strong>Room detail</strong>
                   <p class="subtle">
                     <template v-if="roomSelectionInfo(index)">
-                      {{ roomSelectionInfo(index).roomType }} | {{ roomSelectionInfo(index).flag }} | {{ roomSelectionInfo(index).hk }}
+                      {{ roomSelectionInfo(index).flag }} | {{ roomSelectionInfo(index).hk }}
                     </template>
                     <template v-else>
-                      Select a room to view the room type and housekeeping info.
+                      Select a room to view its housekeeping info.
                     </template>
                   </p>
                 </div>

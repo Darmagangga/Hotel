@@ -157,6 +157,7 @@ export const useHotelStore = defineStore('hotel', {
       { label: 'Departures', value: '1', note: '1 late check-out requested' },
       { label: 'Revenue', value: 'IDR 5.2M', note: 'Room, add-ons, and walk-ins' },
     ],
+    revenueMix: [],
     bookingChannels: ['Booking', 'Direct', 'Airbnb', 'Booking.com'],
     bookingStatuses: ['Tentative', 'Confirmed', 'Checked-in', 'Checked-out', 'Cancelled', 'No-Show'],
     selectedBookingCode: null,
@@ -805,6 +806,14 @@ export const useHotelStore = defineStore('hotel', {
       {
         id: 'TRF-001',
         driver: 'Made Ariana',
+        vendorPickupPriceValue: 200000,
+        vendorPickupPrice: toCurrency(200000),
+        vendorDropOffPriceValue: 180000,
+        vendorDropOffPrice: toCurrency(180000),
+        customerPickupPriceValue: 250000,
+        customerPickupPrice: toCurrency(250000),
+        customerDropOffPriceValue: 225000,
+        customerDropOffPrice: toCurrency(225000),
         pickupPriceValue: 250000,
         pickupPrice: toCurrency(250000),
         dropOffPriceValue: 225000,
@@ -815,6 +824,14 @@ export const useHotelStore = defineStore('hotel', {
       {
         id: 'TRF-002',
         driver: 'Komang Raka',
+        vendorPickupPriceValue: 225000,
+        vendorPickupPrice: toCurrency(225000),
+        vendorDropOffPriceValue: 200000,
+        vendorDropOffPrice: toCurrency(200000),
+        customerPickupPriceValue: 275000,
+        customerPickupPrice: toCurrency(275000),
+        customerDropOffPriceValue: 250000,
+        customerDropOffPrice: toCurrency(250000),
         pickupPriceValue: 275000,
         pickupPrice: toCurrency(275000),
         dropOffPriceValue: 250000,
@@ -1323,17 +1340,17 @@ export const useHotelStore = defineStore('hotel', {
         return state.transportRates.flatMap((item) => ([
           {
             value: `${item.id}:pickup`,
-            label: `${item.driver} | Pickup | ${item.pickupPrice}`,
+            label: `${item.driver} | Pickup | ${item.customerPickupPrice ?? item.pickupPrice}`,
             serviceName: `${item.driver} | Pickup`,
-            unitPriceValue: item.pickupPriceValue,
+            unitPriceValue: item.customerPickupPriceValue ?? item.pickupPriceValue,
             addonLabel: 'Airport pickup',
             itemRef: item.id,
           },
           {
             value: `${item.id}:dropoff`,
-            label: `${item.driver} | Drop off | ${item.dropOffPrice}`,
+            label: `${item.driver} | Drop off | ${item.customerDropOffPrice ?? item.dropOffPrice}`,
             serviceName: `${item.driver} | Drop off`,
-            unitPriceValue: item.dropOffPriceValue,
+            unitPriceValue: item.customerDropOffPriceValue ?? item.dropOffPriceValue,
             addonLabel: 'Airport drop off',
             itemRef: item.id,
           },
@@ -1341,33 +1358,36 @@ export const useHotelStore = defineStore('hotel', {
       }
 
       if (addonType === 'scooter') {
-        return state.scooterBookings.map((item) => ({
+        return state.scooterBookings.filter((item) => item.isActive !== false).map((item) => ({
           value: item.id,
-          label: `${item.scooterType} | ${item.vendor} | ${item.price}`,
+          label: `${item.scooterType} | ${item.vendor} | ${item.customerPrice ?? item.price}`,
           serviceName: `${item.scooterType} | ${item.vendor}`,
-          unitPriceValue: item.priceValue,
+          unitPriceValue: item.customerPriceValue ?? item.priceValue,
+          vendorUnitPriceValue: item.vendorPriceValue ?? 0,
           addonLabel: 'Scooter rental',
           itemRef: item.id,
         }))
       }
 
       if (addonType === 'island_tour') {
-        return state.islandTours.map((item) => ({
+        return state.islandTours.filter((item) => item.isActive !== false).map((item) => ({
           value: item.id,
-          label: `${item.destination} | ${item.driver} | ${item.cost}`,
+          label: `${item.destination} | ${item.driver} | ${item.customerPrice ?? item.cost}`,
           serviceName: `${item.destination} | ${item.driver}`,
-          unitPriceValue: item.costValue,
+          unitPriceValue: item.customerPriceValue ?? item.costValue,
+          vendorUnitPriceValue: item.vendorPriceValue ?? 0,
           addonLabel: 'Island tour',
           itemRef: item.id,
         }))
       }
 
       if (addonType === 'boat_ticket') {
-        return state.boatTickets.map((item) => ({
+        return state.boatTickets.filter((item) => item.isActive !== false).map((item) => ({
           value: item.id,
-          label: `${item.company} | ${item.destination} | ${item.price}`,
+          label: `${item.company} | ${item.destination} | ${item.customerPrice ?? item.price}`,
           serviceName: `${item.company} | ${item.destination}`,
-          unitPriceValue: item.priceValue,
+          unitPriceValue: item.customerPriceValue ?? item.priceValue,
+          vendorUnitPriceValue: item.vendorPriceValue ?? 0,
           addonLabel: 'Boat ticket',
           itemRef: item.id,
         }))
@@ -1417,6 +1437,9 @@ export const useHotelStore = defineStore('hotel', {
     },
     setOverview(items) {
       this.overview = Array.isArray(items) ? items : []
+    },
+    setRevenueMix(items) {
+      this.revenueMix = Array.isArray(items) ? items : []
     },
     setBusinessDate(value) {
       const nextBusinessDate = String(value ?? '').trim() || this.currentBusinessDate
@@ -1760,8 +1783,8 @@ export const useHotelStore = defineStore('hotel', {
       const endDate = String(payload.endDate ?? '').trim()
       const priceValue = Number(payload.priceValue ?? 0)
 
-      if (!startDate || !endDate || !scooterType || !vendor || priceValue <= 0) {
-        throw new Error('Tanggal awal, tanggal akhir, tipe scooter, vendor, dan harga wajib diisi.')
+      if (!scooterType || !vendor || priceValue <= 0) {
+        throw new Error('Tipe scooter, vendor, dan harga wajib diisi.')
       }
 
       const scooterBooking = {
@@ -1790,8 +1813,8 @@ export const useHotelStore = defineStore('hotel', {
       const endDate = String(payload.endDate ?? '').trim()
       const priceValue = Number(payload.priceValue ?? 0)
 
-      if (!startDate || !endDate || !scooterType || !vendor || priceValue <= 0) {
-        throw new Error('Tanggal awal, tanggal akhir, tipe scooter, vendor, dan harga wajib diisi.')
+      if (!scooterType || !vendor || priceValue <= 0) {
+        throw new Error('Tipe scooter, vendor, dan harga wajib diisi.')
       }
 
       scooterBooking.startDate = startDate
@@ -1935,22 +1958,32 @@ export const useHotelStore = defineStore('hotel', {
     },
     createTransportRate(payload) {
       const driver = String(payload.driver ?? '').trim()
-      const pickupPriceValue = Number(payload.pickupPriceValue ?? 0)
-      const dropOffPriceValue = Number(payload.dropOffPriceValue ?? 0)
+      const vendorPickupPriceValue = Number(payload.vendorPickupPriceValue ?? payload.pickupPriceValue ?? 0)
+      const vendorDropOffPriceValue = Number(payload.vendorDropOffPriceValue ?? payload.dropOffPriceValue ?? 0)
+      const customerPickupPriceValue = Number(payload.customerPickupPriceValue ?? payload.pickupPriceValue ?? 0)
+      const customerDropOffPriceValue = Number(payload.customerDropOffPriceValue ?? payload.dropOffPriceValue ?? 0)
       const vehicle = String(payload.vehicle ?? '').trim()
       const note = String(payload.note ?? '').trim()
 
-      if (!driver || pickupPriceValue <= 0 || dropOffPriceValue <= 0) {
+      if (!driver || vendorPickupPriceValue <= 0 || vendorDropOffPriceValue <= 0 || customerPickupPriceValue <= 0 || customerDropOffPriceValue <= 0) {
         throw new Error('Driver, harga pickup, dan harga drop off wajib diisi.')
       }
 
       const transportRate = {
         id: this.buildTransportId(),
         driver,
-        pickupPriceValue,
-        pickupPrice: toCurrency(pickupPriceValue),
-        dropOffPriceValue,
-        dropOffPrice: toCurrency(dropOffPriceValue),
+        vendorPickupPriceValue,
+        vendorPickupPrice: toCurrency(vendorPickupPriceValue),
+        vendorDropOffPriceValue,
+        vendorDropOffPrice: toCurrency(vendorDropOffPriceValue),
+        customerPickupPriceValue,
+        customerPickupPrice: toCurrency(customerPickupPriceValue),
+        customerDropOffPriceValue,
+        customerDropOffPrice: toCurrency(customerDropOffPriceValue),
+        pickupPriceValue: customerPickupPriceValue,
+        pickupPrice: toCurrency(customerPickupPriceValue),
+        dropOffPriceValue: customerDropOffPriceValue,
+        dropOffPrice: toCurrency(customerDropOffPriceValue),
         vehicle: vehicle || 'Vehicle not set',
         note: note || 'Standard transport rate',
       }
@@ -1966,20 +1999,30 @@ export const useHotelStore = defineStore('hotel', {
       }
 
       const driver = String(payload.driver ?? '').trim()
-      const pickupPriceValue = Number(payload.pickupPriceValue ?? 0)
-      const dropOffPriceValue = Number(payload.dropOffPriceValue ?? 0)
+      const vendorPickupPriceValue = Number(payload.vendorPickupPriceValue ?? payload.pickupPriceValue ?? 0)
+      const vendorDropOffPriceValue = Number(payload.vendorDropOffPriceValue ?? payload.dropOffPriceValue ?? 0)
+      const customerPickupPriceValue = Number(payload.customerPickupPriceValue ?? payload.pickupPriceValue ?? 0)
+      const customerDropOffPriceValue = Number(payload.customerDropOffPriceValue ?? payload.dropOffPriceValue ?? 0)
       const vehicle = String(payload.vehicle ?? '').trim()
       const note = String(payload.note ?? '').trim()
 
-      if (!driver || pickupPriceValue <= 0 || dropOffPriceValue <= 0) {
+      if (!driver || vendorPickupPriceValue <= 0 || vendorDropOffPriceValue <= 0 || customerPickupPriceValue <= 0 || customerDropOffPriceValue <= 0) {
         throw new Error('Driver, harga pickup, dan harga drop off wajib diisi.')
       }
 
       transportRate.driver = driver
-      transportRate.pickupPriceValue = pickupPriceValue
-      transportRate.pickupPrice = toCurrency(pickupPriceValue)
-      transportRate.dropOffPriceValue = dropOffPriceValue
-      transportRate.dropOffPrice = toCurrency(dropOffPriceValue)
+      transportRate.vendorPickupPriceValue = vendorPickupPriceValue
+      transportRate.vendorPickupPrice = toCurrency(vendorPickupPriceValue)
+      transportRate.vendorDropOffPriceValue = vendorDropOffPriceValue
+      transportRate.vendorDropOffPrice = toCurrency(vendorDropOffPriceValue)
+      transportRate.customerPickupPriceValue = customerPickupPriceValue
+      transportRate.customerPickupPrice = toCurrency(customerPickupPriceValue)
+      transportRate.customerDropOffPriceValue = customerDropOffPriceValue
+      transportRate.customerDropOffPrice = toCurrency(customerDropOffPriceValue)
+      transportRate.pickupPriceValue = customerPickupPriceValue
+      transportRate.pickupPrice = toCurrency(customerPickupPriceValue)
+      transportRate.dropOffPriceValue = customerDropOffPriceValue
+      transportRate.dropOffPrice = toCurrency(customerDropOffPriceValue)
       transportRate.vehicle = vehicle || 'Vehicle not set'
       transportRate.note = note || 'Standard transport rate'
 
@@ -1999,14 +2042,17 @@ export const useHotelStore = defineStore('hotel', {
         throw new Error('Pilih jenis add-on dan item layanan terlebih dahulu.')
       }
 
-      const quantity = Math.max(1, Number(payload.quantity ?? 1))
-      const totalPriceValue = catalogItem.unitPriceValue * quantity
       const startDate = String(payload.startDate ?? payload.serviceDate ?? '').trim() || booking.checkIn
       const endDate = String(payload.endDate ?? '').trim()
 
       if (addonType === 'scooter' && endDate && endDate < startDate) {
         throw new Error('Tanggal akhir scooter tidak boleh lebih awal dari tanggal mulai.')
       }
+
+      const quantity = addonType === 'scooter' && endDate
+        ? Math.max(1, diffDays(startDate, endDate) + 1)
+        : Math.max(1, Number(payload.quantity ?? 1))
+      const totalPriceValue = catalogItem.unitPriceValue * quantity
 
       const serviceDate = startDate
       const serviceDateLabel =
@@ -2207,8 +2253,36 @@ export const useHotelStore = defineStore('hotel', {
     },
     async login(username, password) {
       const response = await api.post('/login', { username, password })
-      this.user = response.data.user
-      localStorage.setItem('pms_token', String(response.data?.token ?? ''))
+      const payload = typeof response?.data === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(response.data)
+            } catch {
+              return { raw: response.data }
+            }
+          })()
+        : (response?.data ?? {})
+
+      const authPayload = payload?.user
+        ? payload
+        : payload?.data?.user
+          ? payload.data
+          : null
+
+      if (!authPayload?.user || typeof authPayload.user !== 'object') {
+        this.user = null
+        localStorage.removeItem('pms_token')
+        localStorage.removeItem('pms_user')
+        const backendMessage =
+          payload?.message ||
+          payload?.error ||
+          (typeof payload?.raw === 'string' ? payload.raw.slice(0, 200) : null)
+
+        throw new Error(backendMessage || 'Respons login tidak valid.')
+      }
+
+      this.user = authPayload.user
+      localStorage.setItem('pms_token', String(authPayload?.token ?? ''))
       localStorage.setItem('pms_user', JSON.stringify(this.user))
       return this.user
     },
@@ -2219,8 +2293,19 @@ export const useHotelStore = defineStore('hotel', {
     },
     loadUserFromStorage() {
       const stored = localStorage.getItem('pms_user')
-      if (stored) {
+      if (!stored || stored === 'undefined' || stored === 'null') {
+        this.user = null
+        if (stored === 'undefined' || stored === 'null') {
+          localStorage.removeItem('pms_user')
+        }
+        return
+      }
+
+      try {
         this.user = JSON.parse(stored)
+      } catch (error) {
+        this.user = null
+        localStorage.removeItem('pms_user')
       }
     }
   },

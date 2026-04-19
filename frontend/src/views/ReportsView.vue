@@ -17,6 +17,7 @@ const reportTabs = [
   { id: 'roomstatus', label: 'Room Status' },
   { id: 'bukubesar', label: 'General Ledger' },
   { id: 'rekonsiliasi', label: 'Reconciliation' },
+  { id: 'hutangvendor', label: 'Vendor Payables' },
   { id: 'audittrail', label: 'Audit Trail' },
 ]
 
@@ -50,6 +51,28 @@ const reconciliation = ref({
   bookingRows: [],
   paymentRows: [],
 })
+const vendorPayables = ref({
+  summary: {
+    totalOutstanding: 'IDR 0',
+    totalOutstandingValue: 0,
+    totalOverdue: 'IDR 0',
+    totalOverdueValue: 0,
+    dueThisWeek: 'IDR 0',
+    dueThisWeekValue: 0,
+    current: 'IDR 0',
+    aging30: 'IDR 0',
+    aging60: 'IDR 0',
+    aging90: 'IDR 0',
+    agingAbove90: 'IDR 0',
+    vendorCount: 0,
+    openBillCount: 0,
+  },
+  vendors: [],
+  bills: [],
+  payments: [],
+})
+const showVendorDebtModal = ref(false)
+const selectedVendorDebt = ref(null)
 const auditTrail = ref({
   rows: [],
   meta: { total: 0, current_page: 1, last_page: 1, per_page: 20 },
@@ -243,6 +266,26 @@ const filteredRoomStatusRows = computed(() => {
   )
 })
 
+const selectedVendorDebtBills = computed(() => {
+  if (!selectedVendorDebt.value) {
+    return []
+  }
+
+  return (Array.isArray(vendorPayables.value.bills) ? vendorPayables.value.bills : []).filter((item) =>
+    String(item.vendorId) === String(selectedVendorDebt.value.id),
+  )
+})
+
+const selectedVendorDebtPayments = computed(() => {
+  if (!selectedVendorDebt.value) {
+    return []
+  }
+
+  return (Array.isArray(vendorPayables.value.payments) ? vendorPayables.value.payments : []).filter((item) =>
+    String(item.vendorId) === String(selectedVendorDebt.value.id),
+  )
+})
+
 const excelAmountFormat = '#,##0;[Red](#,##0)'
 
 const getExportTimestamp = () =>
@@ -337,11 +380,12 @@ const loadAllReports = async () => {
   reportResult.value = { tone: '', text: '' }
 
   try {
-    const [plRes, bsRes, cfRes, reconRes, auditRes, coaRes, roomsRes, housekeepingRes] = await Promise.all([
+    const [plRes, bsRes, cfRes, reconRes, vendorPayablesRes, auditRes, coaRes, roomsRes, housekeepingRes] = await Promise.all([
       api.get('/reports/profit-loss'),
       api.get('/reports/balance-sheet'),
       api.get('/reports/cash-flow'),
       api.get('/reports/reconciliation'),
+      api.get('/reports/vendor-payables').catch(() => ({ data: { data: vendorPayables.value } })),
       api.get('/audit-trails'),
       api.get('/coa-accounts', { params: { per_page: 500 } }),
       api.get('/rooms', { params: { per_page: 500 } }),
@@ -352,6 +396,7 @@ const loadAllReports = async () => {
     balanceSheet.value = bsRes.data?.data || balanceSheet.value
     cashFlow.value = cfRes.data?.data || cashFlow.value
     reconciliation.value = reconRes.data?.data || reconciliation.value
+    vendorPayables.value = vendorPayablesRes.data?.data || vendorPayables.value
     auditTrail.value = {
       rows: normalizeAuditRows(auditRes.data?.data),
       meta: auditRes.data?.meta || auditTrail.value.meta,
@@ -448,6 +493,16 @@ const setActiveTab = async (tabId) => {
       tab: tabId,
     },
   })
+}
+
+const openVendorDebtModal = (vendor) => {
+  selectedVendorDebt.value = vendor
+  showVendorDebtModal.value = true
+}
+
+const closeVendorDebtModal = () => {
+  showVendorDebtModal.value = false
+  selectedVendorDebt.value = null
 }
 
 onMounted(() => {
@@ -1509,6 +1564,93 @@ const printReconciliationReport = () => {
         </table>
       </div>
 
+      <div v-if="activeTab === 'hutangvendor'">
+        <div class="booking-inline-summary" style="margin-top: 1rem;">
+          <div class="note-cell">
+            <strong>Total outstanding</strong>
+            <p class="subtle" style="font-size: 1.2rem; color: var(--primary); font-weight: bold;">{{ vendorPayables.summary.totalOutstanding }}</p>
+          </div>
+          <div class="note-cell">
+            <strong>Overdue</strong>
+            <p class="subtle">{{ vendorPayables.summary.totalOverdue }}</p>
+          </div>
+          <div class="note-cell">
+            <strong>Due this week</strong>
+            <p class="subtle">{{ vendorPayables.summary.dueThisWeek }}</p>
+          </div>
+          <div class="note-cell">
+            <strong>Open bills</strong>
+            <p class="subtle">{{ vendorPayables.summary.openBillCount }} bill(s)</p>
+          </div>
+        </div>
+
+        <section class="page-grid two" style="margin-top: 1rem;">
+          <article class="panel-card panel-dense">
+            <div class="panel-head panel-head-tight">
+              <div>
+                <p class="eyebrow-dark">Vendor Aging</p>
+                <h3>Outstanding by age bucket</h3>
+              </div>
+            </div>
+
+            <div class="compact-list">
+              <div class="list-row list-row-tight"><strong>Current</strong><p class="subtle">{{ vendorPayables.summary.current }}</p></div>
+              <div class="list-row list-row-tight"><strong>1-30 days</strong><p class="subtle">{{ vendorPayables.summary.aging30 }}</p></div>
+              <div class="list-row list-row-tight"><strong>31-60 days</strong><p class="subtle">{{ vendorPayables.summary.aging60 }}</p></div>
+              <div class="list-row list-row-tight"><strong>61-90 days</strong><p class="subtle">{{ vendorPayables.summary.aging90 }}</p></div>
+              <div class="list-row list-row-tight"><strong>> 90 days</strong><p class="subtle">{{ vendorPayables.summary.agingAbove90 }}</p></div>
+            </div>
+          </article>
+
+          <article class="panel-card panel-dense">
+            <div class="panel-head panel-head-tight">
+              <div>
+                <p class="eyebrow-dark">Debt Summary</p>
+                <h3>Vendor liability overview</h3>
+              </div>
+            </div>
+
+            <div class="compact-list">
+              <div class="list-row list-row-tight"><strong>Total vendors</strong><p class="subtle">{{ vendorPayables.summary.vendorCount }}</p></div>
+              <div class="list-row list-row-tight"><strong>Overdue value</strong><p class="subtle">{{ vendorPayables.summary.totalOverdue }}</p></div>
+              <div class="list-row list-row-tight"><strong>Outstanding value</strong><p class="subtle">{{ vendorPayables.summary.totalOutstanding }}</p></div>
+            </div>
+          </article>
+        </section>
+
+        <h4 style="margin: 1.5rem 0 0.5rem 0; color: var(--text-main);">Hutang per vendor</h4>
+        <table v-smart-table class="data-table finance-table">
+          <thead>
+            <tr>
+              <th>Vendor</th>
+              <th>Terms</th>
+              <th>Outstanding</th>
+              <th>Overdue</th>
+              <th>Open bills</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!loading && !vendorPayables.vendors.length">
+              <td colspan="6" class="table-empty-cell">No vendor payable data available yet.</td>
+            </tr>
+            <tr v-for="item in vendorPayables.vendors" :key="item.id">
+              <td>
+                <div><strong>{{ item.vendorName }}</strong></div>
+                <div class="subtle">{{ item.vendorCode || '-' }}</div>
+              </td>
+              <td>{{ item.paymentTermsDays ?? 0 }} day(s)</td>
+              <td>{{ item.outstanding }}</td>
+              <td>{{ item.overdue }}</td>
+              <td>{{ item.openBillCount ?? 0 }}</td>
+              <td>
+                <button class="action-button" @click="openVendorDebtModal(item)">Lihat hutang</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <div v-if="activeTab === 'audittrail'">
         <div class="booking-inline-summary" style="margin-top: 1rem;">
           <div class="note-cell">
@@ -1575,5 +1717,108 @@ const printReconciliationReport = () => {
 
     </article>
   </section>
+
+  <div v-if="showVendorDebtModal && selectedVendorDebt" class="modal-backdrop" @click.self="closeVendorDebtModal()">
+    <section class="modal-card invoice-modal-card">
+      <div class="panel-head panel-head-tight">
+        <div>
+          <p class="eyebrow-dark">Vendor Debt</p>
+          <h3>{{ selectedVendorDebt.vendorName }}</h3>
+        </div>
+        <button class="action-button" @click="closeVendorDebtModal()">Close</button>
+      </div>
+
+      <div class="booking-inline-summary">
+        <div class="note-cell">
+          <strong>Outstanding</strong>
+          <p class="subtle">{{ selectedVendorDebt.outstanding }}</p>
+        </div>
+        <div class="note-cell">
+          <strong>Overdue</strong>
+          <p class="subtle">{{ selectedVendorDebt.overdue }}</p>
+        </div>
+        <div class="note-cell">
+          <strong>Open bills</strong>
+          <p class="subtle">{{ selectedVendorDebt.openBillCount ?? selectedVendorDebtBills.length }}</p>
+        </div>
+      </div>
+
+      <article class="panel-card panel-dense">
+        <div class="panel-head panel-head-tight">
+          <div>
+            <p class="eyebrow-dark">Bills</p>
+            <h3>Daftar hutang vendor</h3>
+          </div>
+          <span class="status-badge warning">{{ selectedVendorDebtBills.length }} bill(s)</span>
+        </div>
+
+        <div class="table-scroll">
+          <table class="data-table finance-table">
+            <thead>
+              <tr>
+                <th>Bill</th>
+                <th>Due date</th>
+                <th>Total</th>
+                <th>Balance</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!selectedVendorDebtBills.length">
+                <td colspan="5" class="table-empty-cell">No debt records for this vendor.</td>
+              </tr>
+              <tr v-for="item in selectedVendorDebtBills" :key="item.id">
+                <td>
+                  <div><strong>{{ item.billNumber }}</strong></div>
+                  <div class="subtle">{{ item.description || '-' }}</div>
+                </td>
+                <td>{{ item.dueDate }}</td>
+                <td>{{ item.grandTotal }}</td>
+                <td>{{ item.balanceDue }}</td>
+                <td>{{ item.statusLabel }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="panel-card panel-dense" style="margin-top: 1rem;">
+        <div class="panel-head panel-head-tight">
+          <div>
+            <p class="eyebrow-dark">Payments</p>
+            <h3>Pembayaran vendor terkait</h3>
+          </div>
+          <span class="status-badge success">{{ selectedVendorDebtPayments.length }} payment(s)</span>
+        </div>
+
+        <div class="table-scroll">
+          <table class="data-table finance-table">
+            <thead>
+              <tr>
+                <th>Payment</th>
+                <th>Date</th>
+                <th>Method</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!selectedVendorDebtPayments.length">
+                <td colspan="4" class="table-empty-cell">No payment records for this vendor.</td>
+              </tr>
+              <tr v-for="item in selectedVendorDebtPayments" :key="item.id">
+                <td>
+                  <div><strong>{{ item.paymentNumber }}</strong></div>
+                  <div class="subtle">{{ item.referenceNumber || '-' }}</div>
+                </td>
+                <td>{{ item.paymentDate }}</td>
+                <td>{{ item.paymentMethodLabel }}</td>
+                <td>{{ item.amount }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+  </div>
 </template>
 
